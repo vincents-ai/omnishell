@@ -26,3 +26,5 @@ pub use config::load_config;
 pub use error::{OmniShellError, Result};
 pub use plugin::{OmniShellPlugin, PluginMeta, PluginContext, OmniShellBuilder};
 pub use profile::{OmniShellConfig, Profile, Mode};
+pub use snapshot::{SnapshotEngine, Snapshot, SnapshotPhase};
+pub use undo::UndoStack;
