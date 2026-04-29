@@ -1,0 +1,29 @@
+[package]
+name = "omnishell"
+version = "0.1.0"
+edition = "2021"
+authors = ["Vincent Palmer <shift@someone.section.me>"]
+description = "An intelligent, ACL-fortified shell powered by shrs, llm, and gitoxide"
+
+[dependencies]
+# Shell framework
+shrs = { version = "0.0.6", features = [] }
+
+# CLI Parsing for modes
+clap = { version = "4.4", features = ["derive"] }
+
+# Error handling and structures
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+colored = "2.0" # For kids mode terminal coloring
+
+# Gitoxide (patched below to your fork)
+gix = "0.57" 
+
+# Hypothetical LLM crate (replace with actual when available)
+# vincents-ai-llm = "0.1"
+
+[patch.crates-io]
+gix = { git = "https://github.com/vincents-ai/gitoxide" }
+# vincents-ai-llm = { git = "https://github.com/vincents-ai/llm" }

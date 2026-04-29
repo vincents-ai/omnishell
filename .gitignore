@@ -1,0 +1,59 @@
+# Build artifacts
+target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.pem
+/config.yaml
+/test-config.yaml
+/config/
+.envrc
+
+# Credentials
+/authorized_keys
+/ssh_keys/
+k8s/secrets.yaml
+
+# Nix
+/result
+/result-*
+
+# Engram
+/.engram/
+
+# Direnv
+/.direnv/
+
+# Local test data
+/admin/
+/repositories/
+/data/
+
+# Temp directories
+*.tmp
+temp/
+
+# Test results and internal docs
+/VM_TESTING.md
+/TEST_RESULTS.md
+/docs/COMMERCIAL_ROADMAP.md
+/docs/GIT_OPERATIONS_DESIGN.md
+
+# Internal files
+internal/
+
+# Dispatcher internal state
+.internal/
+test-git-*
+test-git-2817323/
