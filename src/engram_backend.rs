@@ -1,8 +1,7 @@
-//! OmniShellTool — agentic-loop integration.
+//! OmniShellTool — agentic-loop integration + engram context provider.
 //!
-//! Provides a Tool trait implementation that allows agentic-loop agents
-//! to execute shell commands through OmniShell's ACL, output formatting,
-//! and audit pipeline. The tool accepts JSON command specs and returns
+//! Part 1: OmniShellTool exposes shell execution to agentic-loop agents.
+//! Part 2: EngramContext provides LLM context injection from engram's git storage.
 //! structured JSON responses.
 
 use serde::{Deserialize, Serialize};
@@ -305,5 +304,176 @@ mod tests {
             capture_stderr: true,
         });
         assert!(result.allowed);
+    }
+}
+
+// --- Engram Context Provider ---
+
+/// Engram context provider for LLM integration.
+///
+/// Reads engram's git-based storage (tasks, reasoning, ADRs) via the engram CLI
+/// and formats them as context for LLM prompts.
+pub struct EngramContext {
+    /// Path to the engram CLI binary.
+    cli_path: String,
+    /// Whether engram is available.
+    available: bool,
+}
+
+impl EngramContext {
+    /// Create a new engram context provider.
+    pub fn new() -> Self {
+        let cli_path = "engram".to_string();
+        let available = Self::check_engram_available(&cli_path);
+        Self { cli_path, available }
+    }
+
+    /// Create with a specific CLI path.
+    pub fn with_path(cli_path: String) -> Self {
+        let available = Self::check_engram_available(&cli_path);
+        Self { cli_path, available }
+    }
+
+    /// Check if engram CLI is available.
+    fn check_engram_available(cli_path: &str) -> bool {
+        std::process::Command::new(cli_path)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Check if engram is available.
+    pub fn is_available(&self) -> bool {
+        self.available
+    }
+
+    /// Get the current task context for LLM injection.
+    pub fn get_task_context(&self, task_id: &str) -> Result<String, String> {
+        if !self.available {
+            return Ok("(engram not available)".to_string());
+        }
+
+        let output = std::process::Command::new(&self.cli_path)
+            .args(["task", "show", task_id])
+            .output()
+            .map_err(|e| format!("Failed to run engram: {}", e))?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            Err(format!("engram task show failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
+    }
+
+    /// Get recent tasks for context.
+    pub fn get_recent_tasks(&self, limit: usize) -> Result<String, String> {
+        if !self.available {
+            return Ok("(engram not available)".to_string());
+        }
+
+        let output = std::process::Command::new(&self.cli_path)
+            .args(["task", "list", "--limit", &limit.to_string()])
+            .output()
+            .map_err(|e| format!("Failed to run engram: {}", e))?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            Err(format!("engram task list failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
+    }
+
+    /// Get the next task for the current session.
+    pub fn get_next_task(&self) -> Result<String, String> {
+        if !self.available {
+            return Ok("(engram not available)".to_string());
+        }
+
+        let output = std::process::Command::new(&self.cli_path)
+            .args(["next"])
+            .output()
+            .map_err(|e| format!("Failed to run engram: {}", e))?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            // No next task is not an error
+            Ok("(no pending tasks)".to_string())
+        }
+    }
+
+    /// Build a context string for LLM system prompt.
+    pub fn build_llm_context(&self) -> String {
+        let mut context = String::new();
+
+        if let Ok(next) = self.get_next_task() {
+            if !next.contains("engram not available") {
+                context.push_str("Current task context:\n");
+                context.push_str(&next);
+                context.push_str("\n\n");
+            }
+        }
+
+        if let Ok(tasks) = self.get_recent_tasks(5) {
+            if !tasks.contains("engram not available") {
+                context.push_str("Recent tasks:\n");
+                context.push_str(&tasks);
+            }
+        }
+
+        if context.is_empty() {
+            context = "(no engram context available)".to_string();
+        }
+
+        context
+    }
+}
+
+impl Default for EngramContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod engram_tests {
+    use super::*;
+
+    #[test]
+    fn test_engram_context_new() {
+        let ctx = EngramContext::new();
+        // May or may not be available depending on environment
+        // Just check it doesn't panic
+        let _ = ctx.is_available();
+    }
+
+    #[test]
+    fn test_engram_context_with_invalid_path() {
+        let ctx = EngramContext::with_path("/nonexistent/engram_binary_12345".to_string());
+        assert!(!ctx.is_available());
+    }
+
+    #[test]
+    fn test_engram_context_graceful_when_unavailable() {
+        let ctx = EngramContext::with_path("/nonexistent/engram_binary_12345".to_string());
+        let result = ctx.get_task_context("test-id").unwrap();
+        assert!(result.contains("engram not available"));
+    }
+
+    #[test]
+    fn test_engram_build_context_when_unavailable() {
+        let ctx = EngramContext::with_path("/nonexistent/engram_binary_12345".to_string());
+        let context = ctx.build_llm_context();
+        assert!(context.contains("no engram context available"));
+    }
+
+    #[test]
+    fn test_engram_get_recent_tasks_when_unavailable() {
+        let ctx = EngramContext::with_path("/nonexistent/engram_binary_12345".to_string());
+        let result = ctx.get_recent_tasks(5).unwrap();
+        assert!(result.contains("engram not available"));
     }
 }
