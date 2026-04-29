@@ -117,12 +117,14 @@ mod tests {
             username: Some("child".to_string()),
             display_name: Some("User Kids".to_string()),
             age: Some(6),
+            ..Default::default()
         });
         system.profile.insert("kids".to_string(), Profile {
             mode: Mode::Kids,
             username: Some("child".to_string()),
             display_name: Some("System Kids".to_string()),
             age: Some(7),
+            ..Default::default()
         });
 
         let merged = merge_configs(user, system);
@@ -139,7 +141,7 @@ mod tests {
             mode: Mode::Agent,
             username: None,
             display_name: Some("My Custom".to_string()),
-            age: None,
+            ..Default::default()
         });
 
         let merged = merge_configs(user, system);

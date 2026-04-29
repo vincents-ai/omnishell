@@ -160,6 +160,7 @@ fn test_profile_resolution_from_config() {
         username: Some("child".to_string()),
         display_name: Some("Kids Mode".to_string()),
         age: Some(7),
+        ..Default::default()
     });
 
     // Default is admin

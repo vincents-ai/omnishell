@@ -131,25 +131,21 @@ mod tests {
         let mut profile = HashMap::new();
         profile.insert("kids".to_string(), Profile {
             mode: Mode::Kids,
-            username: None,
-            display_name: None,
             age: Some(7),
+            ..Default::default()
         });
         profile.insert("agent".to_string(), Profile {
             mode: Mode::Agent,
-            username: None,
-            display_name: None,
-            age: None,
+            ..Default::default()
         });
         profile.insert("admin".to_string(), Profile {
             mode: Mode::Admin,
-            username: None,
-            display_name: None,
-            age: None,
+            ..Default::default()
         });
         OmniShellConfig {
             profile,
             default_profile: None,
+            ..Default::default()
         }
     }
 
@@ -193,13 +189,11 @@ mod tests {
         let mut profile = HashMap::new();
         profile.insert("only".to_string(), Profile {
             mode: Mode::Admin,
-            username: None,
-            display_name: None,
-            age: None,
+            ..Default::default()
         });
         let config = OmniShellConfig {
             profile,
-            default_profile: None,
+            ..Default::default()
         };
 
         let cards = generate_cards(&config);

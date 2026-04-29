@@ -1,5 +1,17 @@
+use std::path::Path;
+
 use clap::Parser;
-use omnishell::{OmniShellBuilder, OmniShellConfig, load_config};
+use omnishell::{
+    OmniShellConfig, Mode,
+    load_config,
+    AclEngine, Verdict,
+    SnapshotEngine, UndoStack,
+    builtins,
+};
+use omnishell::output::format_error;
+use omnishell::history::{History, HistoryConfig};
+use omnishell::audit::{AuditLogger, AuditConfig};
+use omnishell::theme::Theme;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "OmniShell: An intelligent, ACL-fortified shell")]
@@ -19,6 +31,10 @@ struct Args {
     /// Disable LLM features for this session
     #[arg(long)]
     no_llm: bool,
+
+    /// Run a single command and exit (non-interactive)
+    #[arg(short, long)]
+    command: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
@@ -32,7 +48,7 @@ fn main() {
     let args = Args::parse();
 
     // Load configuration
-    let config_path = args.config.as_deref().map(std::path::Path::new);
+    let config_path = args.config.as_deref().map(Path::new);
     let config = load_config(config_path).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load config: {}. Using defaults.", e);
         OmniShellConfig::default()
@@ -40,19 +56,136 @@ fn main() {
 
     // Resolve profile
     let profile_name = resolve_profile(&config, args.profile.as_deref());
-
-    let profile = config.profile.get(&profile_name).unwrap_or_else(|| {
+    let _profile = config.profile.get(&profile_name).unwrap_or_else(|| {
         eprintln!("Warning: Profile '{}' not found. Using default.", profile_name);
         config.profile.get("default").expect("default profile always exists")
     });
 
-    eprintln!("OmniShell starting in {:?} mode with profile '{}'", profile.mode, profile_name);
+    // --mode flag overrides the profile's mode
+    let mode = match args.mode {
+        ShellMode::Kids => Mode::Kids,
+        ShellMode::Agent => Mode::Agent,
+        ShellMode::Admin => Mode::Admin,
+    };
+    // Resolve LLM config
+    let _llm_enabled = config.llm.enabled && !args.no_llm;
 
-    // Build OmniShell
-    let _builder = OmniShellBuilder::new(config);
+    // Initialize shell components
+    let mut snapshot_engine = SnapshotEngine::new(&std::env::current_dir().unwrap_or_default());
+    let _undo_stack = UndoStack::new();
+    let _history = History::new(mode, HistoryConfig::default());
+    let audit = AuditLogger::new(mode, AuditConfig::default());
+    let theme = Theme::for_mode(mode);
 
-    // TODO: Wire shrs shell once fork is complete
-    eprintln!("OmniShell is scaffolding. Full shell integration pending shrs fork.");
+    // Print startup banner
+    eprintln!("{}", theme.primary(&format!(
+        "OmniShell {} — {}",
+        env!("CARGO_PKG_VERSION"),
+        profile_name,
+    )));
+    if !_llm_enabled {
+        eprintln!("{}", theme.error("(LLM disabled)"));
+    }
+
+    // If --command was provided, execute and exit
+    if let Some(ref cmd) = args.command {
+        execute_single_command(cmd, mode, &mut snapshot_engine, &audit);
+        return;
+    }
+
+    // Launch interactive shell via shrs
+    run_interactive_shell(mode);
+}
+
+/// Execute a single command non-interactively.
+fn execute_single_command(
+    command: &str,
+    mode: Mode,
+    snapshot_engine: &mut SnapshotEngine,
+    audit: &AuditLogger,
+) {
+    let mut acl = AclEngine::new(mode);
+
+    // ACL check
+    if let Verdict::Deny(reason) = acl.evaluate(command) {
+        eprintln!("{}", format_error(&reason, mode));
+        std::process::exit(126);
+    }
+
+    // Check builtins
+    let tokens: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
+    if !tokens.is_empty() {
+        let cmd = &tokens[0];
+        let args = &tokens[1..];
+
+        if let Some(result) = builtins::dispatch(cmd, args, mode, &mut acl) {
+            match result {
+                omnishell::builtins::BuiltinResult::Success(msg) => println!("{}", msg),
+                omnishell::builtins::BuiltinResult::Error(msg) => {
+                    eprintln!("{}", format_error(&msg, mode));
+                    std::process::exit(1);
+                }
+                omnishell::builtins::BuiltinResult::SwitchMode(new_mode) => {
+                    eprintln!("Mode switch to {} ignored in non-interactive mode", new_mode);
+                }
+                omnishell::builtins::BuiltinResult::Exit => return,
+            }
+            return;
+        }
+    }
+
+    // Snapshot if mutating
+    if SnapshotEngine::is_mutating_command(command) {
+        let _ = snapshot_engine.pre_execution_snapshot(command);
+    }
+
+    // Execute via system
+    let start = std::time::Instant::now();
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .status()
+        .expect("failed to execute command");
+    let duration = start.elapsed().as_millis() as u64;
+    let exit_code = status.code().unwrap_or(1);
+
+    if SnapshotEngine::is_mutating_command(command) {
+        let _ = snapshot_engine.post_execution_snapshot(command, exit_code);
+    }
+
+    // Audit log
+    let entry = omnishell::audit::AuditLogger::entry_for(command, mode)
+        .exit_code(exit_code)
+        .acl_verdict("allowed")
+        .duration_ms(duration)
+        .build();
+    let _ = audit.log(entry);
+
+    std::process::exit(exit_code);
+}
+
+/// Launch the interactive shell using shrs.
+fn run_interactive_shell(mode: Mode) {
+    use shrs::prelude::*;
+
+    let mut hooks = Hooks::new();
+
+    // Register before_command hook for ACL enforcement
+    let hook_mode = mode;
+    hooks.insert(move |ctx: &BeforeCommandCtx| -> anyhow::Result<()> {
+        let acl = AclEngine::new(hook_mode);
+        if let Verdict::Deny(reason) = acl.evaluate(&ctx.command) {
+            eprintln!("{}", format_error(&reason, hook_mode));
+        }
+        Ok(())
+    });
+
+    let myshell = ShellBuilder::default()
+        .with_hooks(hooks)
+        .build()
+        .unwrap();
+
+    myshell.run().unwrap();
 }
 
 fn resolve_profile(config: &OmniShellConfig, cli_profile: Option<&str>) -> String {

@@ -267,12 +267,7 @@ mod tests {
     use crate::profile::Mode;
 
     fn make_profile() -> Profile {
-        Profile {
-            mode: Mode::Admin,
-            username: None,
-            display_name: None,
-            age: None,
-        }
+        Profile { mode: Mode::Admin, ..Default::default() }
     }
 
     fn make_config() -> OmniShellConfig {
