@@ -21,6 +21,7 @@ pub mod engram_backend;
 pub mod undo;
 pub mod picker;
 pub mod theme;
+pub mod picture;
 
 pub use acl::{AclEngine, AclRule, ArgConstraint, Verdict};
 pub use config::load_config;
