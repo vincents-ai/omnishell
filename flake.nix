@@ -4,25 +4,31 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ rust-overlay.overlays.default ];
+        };
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            cargo
-            rustc
-            rustfmt
-            clippy
+            (rust-bin.stable."1.88.0".default.override {
+              extensions = [ "rust-src" "rust-analyzer" ];
+            })
             pkg-config
             openssl
             cmake
             fontconfig
-            zlib # Required by gitoxide
+            zlib
           ];
 
           shellHook = ''
@@ -39,14 +45,11 @@
           
           src = ./.;
           
-          # IMPORTANT: Run `nix run nixpkgs#nix-prefetch-git` or let it fail once
-          # to acquire the combined cargoHash of your local code AND the github patches.
-          cargoHash = pkgs.lib.fakeHash; 
+          cargoHash = pkgs.lib.fakeHash;
 
           nativeBuildInputs = with pkgs; [ pkg-config cmake ];
           buildInputs = with pkgs; [ openssl fontconfig zlib ];
           
-          # Fixes zlib linkage issues for pure rust git implementations
           env = {
             ZLIB_NO_PKG_CONFIG = "1";
           };

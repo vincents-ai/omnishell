@@ -4,26 +4,84 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Vincent Palmer <shift@someone.section.me>"]
 description = "An intelligent, ACL-fortified shell powered by shrs, llm, and gitoxide"
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "omnishell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omnishell"
+path = "src/main.rs"
 
 [dependencies]
 # Shell framework
 shrs = { version = "0.0.6", features = [] }
 
-# CLI Parsing for modes
+# CLI parsing
 clap = { version = "4.4", features = ["derive"] }
 
-# Error handling and structures
+# Error handling
 anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-colored = "2.0" # For kids mode terminal coloring
+toml = "0.8"
 
-# Gitoxide (patched below to your fork)
-gix = "0.57" 
+# Async runtime (for LLM integration)
+tokio = { version = "1", features = ["full"] }
 
-# Hypothetical LLM crate (replace with actual when available)
-# vincents-ai-llm = "0.1"
+# Terminal colouring
+colored = "2.0"
+
+# Gitoxide (pure Rust git, patched to vincents-ai fork)
+gix = { version = "0.83", features = [
+    "tree-editor",
+    "status",
+    "worktree-mutation",
+    "dirwalk",
+    "blob-diff",
+] }
+
+# LLM integration
+vincents-llm = { git = "https://github.com/vincents-ai/llm.git", branch = "main" }
+
+# Linux namespace sandboxing
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["process", "mount", "sched", "signal"] }
+libc = "0.2"
+
+# Terminal image rendering (profile pictures)
+image = "0.25"
+viuer = "0.9"
+
+# Tracing / telemetry
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# XDG directories
+dirs = "6"
+
+# Glob pattern matching for ACL
+glob = "0.3"
+
+[workspace]
+members = [".", "crates/anymap_compat"]
 
 [patch.crates-io]
 gix = { git = "https://github.com/vincents-ai/gitoxide" }
-# vincents-ai-llm = { git = "https://github.com/vincents-ai/llm" }
+anymap = { path = "crates/anymap_compat" }
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+cucumber = "0.21"
+tokio = { version = "1", features = ["test-util", "rt-multi-thread", "macros"] }
+
+[features]
+default = []
+# Enable sandbox namespace tests (Linux only)
+sandbox-tests = []
