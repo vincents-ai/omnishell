@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::acl::AclEngine;
-use crate::builtins;
 use crate::profile::Mode;
 
 /// The completion provider.
@@ -175,9 +174,9 @@ mod tests {
         let results = engine.complete("", Mode::Kids, &acl);
 
         // Kids should only see allowlisted commands + builtins
-        assert!(results.contains(&"?")); // builtin
-        assert!(results.contains(&"ls")); // allowlisted
-        assert!(results.contains(&"echo")); // allowlisted
+        assert!(results.contains(&String::from("?"))); // builtin
+        assert!(results.contains(&String::from("ls"))); // allowlisted
+        assert!(results.contains(&String::from("echo"))); // allowlisted
 
         // Should NOT see arbitrary PATH commands
         // (unless they happen to be on the allowlist)
@@ -215,16 +214,16 @@ mod tests {
         let commands = engine.all_commands(Mode::Admin, &acl);
         // Should at minimum have builtins
         assert!(!commands.is_empty());
-        assert!(commands.contains(&"?".to_string()));
+        assert!(commands.contains(&String::from("?")));
     }
 
     #[test]
     fn test_builtin_names() {
         let names = builtin_names();
-        assert!(names.contains("?"));
-        assert!(names.contains("ai"));
-        assert!(names.contains("help"));
-        assert!(names.contains("exit"));
+        assert!(names.contains(&String::from("?")));
+        assert!(names.contains(&String::from("ai")));
+        assert!(names.contains(&String::from("help")));
+        assert!(names.contains(&String::from("exit")));
         assert_eq!(names.len(), 11);
     }
 }
