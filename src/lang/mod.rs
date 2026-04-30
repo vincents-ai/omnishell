@@ -8,9 +8,11 @@
 
 mod lang_impl;
 mod functions;
+mod shell_mode;
 
 pub use lang_impl::OmniShellLang;
 pub use functions::FunctionTable;
+pub use shell_mode::ShellMode;
 
 /// Result of evaluating a command.
 struct EvalResult {

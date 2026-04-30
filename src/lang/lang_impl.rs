@@ -21,6 +21,9 @@ use super::{expand_arg, envsubst, EvalResult};
 /// - Subshells `(cmd)`
 /// - Background `&` and sequential `;` lists
 /// - File redirections `<`, `>`, `>>`
+/// OmniShell's POSIX-compatible shell language evaluator.
+///
+/// Implements the full POSIX shell grammar with ACL enforcement.
 pub struct OmniShellLang;
 
 impl Default for OmniShellLang {
@@ -336,6 +339,17 @@ fn eval_simple(
         None => return Ok(EvalResult::default()),
     };
     let cmd_args = expanded_args[1..].to_vec();
+
+    // ACL enforcement — check before execution
+    {
+        let shell_mode = states.get::<crate::lang::ShellMode>();
+        let acl = crate::acl::AclEngine::new(shell_mode.0);
+        let full_cmd = expanded_args.join(" ");
+        if let crate::acl::Verdict::Deny(reason) = acl.evaluate(&full_cmd) {
+            eprintln!("{}", crate::output::format_error(&reason, shell_mode.0));
+            return Ok(EvalResult { exit_code: 126 });
+        }
+    }
 
     // Built-in keywords
     match cmd_name {

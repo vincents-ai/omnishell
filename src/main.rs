@@ -165,12 +165,13 @@ fn execute_single_command(
 }
 
 /// Launch the interactive shell using shrs.
-fn run_interactive_shell(_mode: Mode) {
+fn run_interactive_shell(mode: Mode) {
     use shrs::prelude::*;
 
     let myshell = ShellBuilder::default()
         .with_lang(omnishell::lang::OmniShellLang::default())
         .with_state(omnishell::lang::FunctionTable::new())
+        .with_state(omnishell::lang::ShellMode(mode))
         .build()
         .unwrap();
 
