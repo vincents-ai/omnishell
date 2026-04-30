@@ -19,6 +19,8 @@ path = "src/main.rs"
 shrs = { version = "0.0.6", features = [] }
 shrs_job = "0.0.6"
 shrs_lang = "0.0.6"
+shrs_utils = "0.0.6"
+crossterm = "0.26"
 lazy_static = "1.4"
 regex = "1"
 

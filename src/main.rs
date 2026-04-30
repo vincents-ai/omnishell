@@ -167,11 +167,44 @@ fn execute_single_command(
 /// Launch the interactive shell using shrs.
 fn run_interactive_shell(mode: Mode) {
     use shrs::prelude::*;
+    use shrs::readline::prompt::Prompt;
+
+    let mode_emoji = match mode {
+        Mode::Kids => "\u{1f9d2}",       // 🧒
+        Mode::Agent => "\u{1f916}",      // 🤖
+        Mode::Admin => "\u{26a1}",       // ⚡
+    };
+    let mode_name = match mode {
+        Mode::Kids => "kids",
+        Mode::Agent => "agent",
+        Mode::Admin => "admin",
+    };
+
+    let prompt = Prompt::from_sides(
+        move || -> shrs_utils::StyledBuf {
+            use ::crossterm::style::Stylize;
+            let cwd = shrs::readline::prompt::top_pwd();
+            let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+            styled_buf!(
+                format!(" {} {} ", mode_emoji, mode_name).cyan(),
+                format!("{}", user).white().bold(),
+                ":".to_string(),
+                format!("{}", cwd).white().bold(),
+                "$ ".to_string(),
+            )
+        },
+        || -> shrs_utils::StyledBuf { styled_buf!() },
+    );
+
+    let completer = omnishell::completion::CompletionEngine::new();
 
     let myshell = ShellBuilder::default()
         .with_lang(omnishell::lang::OmniShellLang::default())
         .with_state(omnishell::lang::FunctionTable::new())
         .with_state(omnishell::lang::ShellMode(mode))
+        .with_state(omnishell::history::History::new(mode, omnishell::history::HistoryConfig::default()))
+        .with_completer(completer)
+        .with_prompt(prompt)
         .build()
         .unwrap();
 

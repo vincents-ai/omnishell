@@ -229,6 +229,12 @@ impl History {
 }
 
 /// Get the history file path for a mode.
+impl Default for History {
+    fn default() -> Self {
+        Self::new(Mode::Admin, HistoryConfig::default())
+    }
+}
+
 fn history_file_path(mode: Mode) -> PathBuf {
     let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))

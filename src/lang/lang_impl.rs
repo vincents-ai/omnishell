@@ -49,7 +49,14 @@ impl Lang for OmniShellLang {
         let mut rt = states.get_mut::<shrs::prelude::Runtime>();
 
         match eval_command(sh, states, &mut job_mgr, &mut rt, &parsed) {
-            Ok(result) => Ok(CmdOutput::from_status(result.exit_code as i32)),
+            Ok(result) => {
+                // Record in mode-separated history
+                {
+                    let mut history = states.get_mut::<crate::history::History>();
+                    history.push(&line, result.exit_code, None);
+                }
+                Ok(CmdOutput::from_status(result.exit_code as i32))
+            }
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("__omnishell_break__") || msg.contains("__omnishell_continue__") {
