@@ -1,0 +1,34 @@
+# OmniShell — Kids profile with local Ollama
+#
+# Safe for children: strict allowlist, age-appropriate LLM tutor,
+# sandboxed filesystem access.
+
+default_profile = "kids"
+
+[llm]
+provider = "ollama"
+model = "llama3"
+api_base = "http://localhost:11434"
+temperature = 0.3
+max_tokens = 256
+
+[profile.kids]
+mode = "kids"
+username = "child"
+display_name = "Kids Mode"
+age = 7
+
+[profile.kids.llm]
+model = "llama3"
+temperature = 0.3
+max_tokens = 256
+
+# Optional: extend the kids allowlist
+[profile.kids.acl]
+extra_allow = ["python3", "git"]
+
+[profile.agent]
+mode = "agent"
+
+[profile.admin]
+mode = "admin"

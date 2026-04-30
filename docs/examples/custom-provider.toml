@@ -1,0 +1,23 @@
+# OmniShell — Custom / OpenAI-compatible provider
+#
+# Point OmniShell at any OpenAI-compatible API endpoint.
+
+default_profile = "agent"
+
+[llm]
+provider = "custom"
+api_base = "http://my-llm-host:8080/v1"
+model = "my-fine-tuned-model"
+temperature = 0.4
+max_tokens = 2048
+timeout_secs = 120
+
+[profile.agent]
+mode = "agent"
+
+[profile.admin]
+mode = "admin"
+
+[profile.admin.llm]
+temperature = 0.8
+max_tokens = 8192

@@ -1,0 +1,41 @@
+{
+  "default_profile": "agent",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "temperature": 0.7,
+    "max_tokens": 1024
+  },
+  "profile": {
+    "kids": {
+      "mode": "kids",
+      "username": "child",
+      "display_name": "Kids Mode",
+      "age": 7,
+      "llm": {
+        "provider": "ollama",
+        "model": "llama3",
+        "api_base": "http://localhost:11434",
+        "temperature": 0.3,
+        "max_tokens": 256
+      },
+      "acl": {
+        "extra_allow": ["python3", "git"]
+      }
+    },
+    "agent": {
+      "mode": "agent",
+      "llm": {
+        "model": "gpt-4o",
+        "temperature": 0.5,
+        "max_tokens": 2048
+      },
+      "acl": {
+        "extra_block": ["curl", "wget"]
+      }
+    },
+    "admin": {
+      "mode": "admin"
+    }
+  }
+}
