@@ -170,6 +170,7 @@ fn run_interactive_shell(_mode: Mode) {
 
     let myshell = ShellBuilder::default()
         .with_lang(omnishell::lang::OmniShellLang::default())
+        .with_state(omnishell::lang::FunctionTable::new())
         .build()
         .unwrap();
 

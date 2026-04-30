@@ -7,8 +7,10 @@
 
 
 mod lang_impl;
+mod functions;
 
 pub use lang_impl::OmniShellLang;
+pub use functions::FunctionTable;
 
 /// Result of evaluating a command.
 struct EvalResult {
@@ -68,12 +70,21 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
     use lazy_static::lazy_static;
 
     lazy_static! {
+        static ref R_ARITH: Regex = Regex::new(r#"\$\(\(([^)]+)\)\)"#).unwrap();
         static ref R_DOLLAR_VAR: Regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
         static ref R_DOLLAR_BRACE: Regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
         static ref R_CMD_SUB: Regex = Regex::new(r"\$\(([^)]+)\)").unwrap();
     }
 
     let mut result = arg.to_string();
+
+    // Arithmetic expansion: $((expr))
+    for cap in R_ARITH.captures_iter(arg) {
+        let full = cap.get(0).unwrap().as_str();
+        let expr = &cap[1];
+        let value = eval_arithmetic(expr);
+        result = result.replace(full, &value.to_string());
+    }
 
     // Command substitution: $(command)
     for cap in R_CMD_SUB.captures_iter(arg) {
@@ -120,6 +131,74 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
     result
 }
 
+/// Evaluate a simple arithmetic expression.
+/// Supports: +, -, *, /, %, parentheses, and integer literals.
+fn eval_arithmetic(expr: &str) -> i64 {
+    let expr = expr.trim();
+
+    // Simple recursive descent parser
+    let mut pos = 0;
+    let chars: Vec<char> = expr.chars().collect();
+
+    fn parse_expr(chars: &[char], pos: &mut usize) -> i64 {
+        let mut result = parse_term(chars, pos);
+        while *pos < chars.len() {
+            skip_whitespace(chars, pos);
+            match chars.get(*pos) {
+                Some('+') => { *pos += 1; result += parse_term(chars, pos); }
+                Some('-') => { *pos += 1; result -= parse_term(chars, pos); }
+                _ => break,
+            }
+        }
+        result
+    }
+
+    fn parse_term(chars: &[char], pos: &mut usize) -> i64 {
+        let mut result = parse_factor(chars, pos);
+        while *pos < chars.len() {
+            skip_whitespace(chars, pos);
+            match chars.get(*pos) {
+                Some('*') => { *pos += 1; result *= parse_factor(chars, pos); }
+                Some('/') => { *pos += 1; let d = parse_factor(chars, pos); if d != 0 { result /= d; } else { result = 0; } }
+                Some('%') => { *pos += 1; let d = parse_factor(chars, pos); if d != 0 { result %= d; } else { result = 0; } }
+                _ => break,
+            }
+        }
+        result
+    }
+
+    fn parse_factor(chars: &[char], pos: &mut usize) -> i64 {
+        skip_whitespace(chars, pos);
+        if *pos < chars.len() && chars[*pos] == '(' {
+            *pos += 1; // skip (
+            let result = parse_expr(chars, pos);
+            if *pos < chars.len() && chars[*pos] == ')' { *pos += 1; }
+            return result;
+        }
+        // Unary minus
+        if *pos < chars.len() && chars[*pos] == '-' {
+            *pos += 1;
+            return -parse_factor(chars, pos);
+        }
+        // Parse number
+        let start = *pos;
+        while *pos < chars.len() && (chars[*pos].is_ascii_digit()) {
+            *pos += 1;
+        }
+        if start == *pos { return 0; }
+        let num_str: String = chars[start..*pos].iter().collect();
+        num_str.parse().unwrap_or(0)
+    }
+
+    fn skip_whitespace(chars: &[char], pos: &mut usize) {
+        while *pos < chars.len() && chars[*pos].is_whitespace() {
+            *pos += 1;
+        }
+    }
+
+    parse_expr(&chars, &mut pos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +232,16 @@ mod tests {
 
         let cap2 = re.captures("result=$(echo hello)").unwrap();
         assert_eq!(&cap2[1], "echo hello");
+    }
+
+    #[test]
+    fn test_arithmetic_regex() {
+        use regex::Regex;
+        let re = Regex::new(r#"\$\(\(([^)]+)\)\)"#).unwrap();
+        let cap = re.captures("echo $((1+2))").unwrap();
+        assert_eq!(&cap[1], "1+2");
+
+        let cap2 = re.captures("$((10 * 5))").unwrap();
+        assert_eq!(&cap2[1], "10 * 5");
     }
 }

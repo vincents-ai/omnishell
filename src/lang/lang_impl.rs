@@ -291,13 +291,11 @@ fn eval_command(
             Ok(EvalResult::default())
         }
 
-        // --- Function definition (store for later use) ---
-        // NOTE: shrs_core Runtime doesn't expose a functions table,
-        // so function defs are accepted but can't be called yet.
-        ast::Command::Fn { fname, body: _ } => {
-            // Would need our own function table here
-            eprintln!("omnishell: function definitions not yet supported: {}", fname);
-            Ok(EvalResult { exit_code: 1 })
+        // --- Function definition ---
+        ast::Command::Fn { fname, body } => {
+            let mut funcs = states.get_mut::<crate::lang::FunctionTable>();
+            funcs.define(fname.clone(), *body.clone());
+            Ok(EvalResult::default())
         }
 
         // --- None (empty command) ---
@@ -349,6 +347,19 @@ fn eval_simple(
         }
         "true" | ":" => return Ok(EvalResult { exit_code: 0 }),
         "false" => return Ok(EvalResult { exit_code: 1 }),
+        "test" | "[" => {
+            let args = if cmd_name == "[" {
+                // Strip trailing ]
+                let mut a = cmd_args.to_vec();
+                if a.last().map(|s| s.as_str()) == Some("]") {
+                    a.pop();
+                }
+                a
+            } else {
+                cmd_args.to_vec()
+            };
+            return Ok(EvalResult { exit_code: builtin_test(&args) });
+        }
         _ => {}
     }
 
@@ -357,6 +368,14 @@ fn eval_simple(
         if builtin_name == &cmd_name {
             let _ = builtin_cmd.run(sh, states, &cmd_args);
             return Ok(EvalResult { exit_code: 0 });
+        }
+    }
+
+    // Check user-defined functions
+    {
+        let funcs = states.get::<crate::lang::FunctionTable>();
+        if let Some(func_body) = funcs.get(cmd_name).cloned() {
+            return eval_command(sh, states, job_mgr, rt, &func_body);
         }
     }
 
@@ -522,4 +541,157 @@ fn run_job_bg(
         .put_job_in_background(Some(job_id), false)
         .map_err(|e| anyhow::anyhow!("job error: {}", e))?;
     Ok(())
+}
+
+/// Built-in `test` / `[` command.
+///
+/// Supports common POSIX test expressions:
+/// - String: -z, -n, =, !=
+/// - File: -e, -f, -d, -r, -w, -x, -s
+/// - Numeric: -eq, -ne, -lt, -le, -gt, -ge
+/// - Logical: !, -a, -o
+fn builtin_test(args: &[String]) -> i32 {
+    let mut pos = 0;
+    let result = eval_test(args, &mut pos);
+    if result { 0 } else { 1 }
+}
+
+fn eval_test(args: &[String], pos: &mut usize) -> bool {
+    let left = eval_test_primary(args, pos);
+
+    if *pos < args.len() {
+        match args[*pos].as_str() {
+            "=" | "==" => {
+                *pos += 1;
+                let right = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+                *pos += 1;
+                return left == right;
+            }
+            "!=" => {
+                *pos += 1;
+                let right = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+                *pos += 1;
+                return left != right;
+            }
+            "-eq" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) == r;
+            }
+            "-ne" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) != r;
+            }
+            "-lt" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) < r;
+            }
+            "-le" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) <= r;
+            }
+            "-gt" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) > r;
+            }
+            "-ge" => {
+                *pos += 1;
+                let r: i64 = args.get(*pos).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *pos += 1;
+                return left.parse::<i64>().unwrap_or(0) >= r;
+            }
+            "-a" => {
+                *pos += 1;
+                // left is a string from primary — treat as bool by checking non-empty
+                // But actually -a is AND between two primaries
+                return left.parse::<bool>().unwrap_or(!left.is_empty()) && eval_test(args, pos);
+            }
+            "-o" => {
+                *pos += 1;
+                return left.parse::<bool>().unwrap_or(!left.is_empty()) || eval_test(args, pos);
+            }
+            _ => {}
+        }
+    }
+    // Treat string as truthy (non-empty)
+    !left.is_empty()
+}
+
+fn eval_test_primary(args: &[String], pos: &mut usize) -> String {
+    let arg = match args.get(*pos) {
+        Some(a) => a,
+        None => return String::new(),
+    };
+
+    match arg.as_str() {
+        "!" => {
+            *pos += 1;
+            let inner = eval_test(args, pos);
+            (!inner).to_string()
+        }
+        "-z" => {
+            *pos += 1;
+            let s = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            s.is_empty().to_string()
+        }
+        "-n" => {
+            *pos += 1;
+            let s = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            (!s.is_empty()).to_string()
+        }
+        "-e" => {
+            *pos += 1;
+            let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            std::path::Path::new(path).exists().to_string()
+        }
+        "-f" => {
+            *pos += 1;
+            let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            std::path::Path::new(path).is_file().to_string()
+        }
+        "-d" => {
+            *pos += 1;
+            let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            std::path::Path::new(path).is_dir().to_string()
+        }
+        "-x" => {
+            *pos += 1;
+            let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            is_executable(path).to_string()
+        }
+        "-s" => {
+            *pos += 1;
+            let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
+            *pos += 1;
+            std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false).to_string()
+        }
+        _ => {
+            *pos += 1;
+            arg.clone()
+        }
+    }
+}
+
+fn is_executable(path: &str) -> bool {
+    std::fs::metadata(path)
+        .map(|m| {
+            use std::os::unix::fs::PermissionsExt;
+            m.permissions().mode() & 0o111 != 0
+        })
+        .unwrap_or(false)
 }
