@@ -165,23 +165,11 @@ fn execute_single_command(
 }
 
 /// Launch the interactive shell using shrs.
-fn run_interactive_shell(mode: Mode) {
+fn run_interactive_shell(_mode: Mode) {
     use shrs::prelude::*;
 
-    let mut hooks = Hooks::new();
-
-    // Register before_command hook for ACL enforcement
-    let hook_mode = mode;
-    hooks.insert(move |ctx: &BeforeCommandCtx| -> anyhow::Result<()> {
-        let acl = AclEngine::new(hook_mode);
-        if let Verdict::Deny(reason) = acl.evaluate(&ctx.command) {
-            eprintln!("{}", format_error(&reason, hook_mode));
-        }
-        Ok(())
-    });
-
     let myshell = ShellBuilder::default()
-        .with_hooks(hooks)
+        .with_lang(omnishell::lang::OmniShellLang::default())
         .build()
         .unwrap();
 

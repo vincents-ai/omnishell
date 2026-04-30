@@ -17,6 +17,7 @@ pub mod builtins;
 pub mod output;
 pub mod completion;
 pub mod history;
+pub mod lang;
 pub mod engram_backend;
 pub mod undo;
 pub mod picker;
