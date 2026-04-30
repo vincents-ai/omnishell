@@ -324,3 +324,174 @@ fn test_full_mode_switch() {
         }
     }
 }
+
+// --- Scripting Integration Tests ---
+// These test the OmniShellLang evaluator via the binary (`omnishell -c "..."`)
+// to ensure end-to-end correctness.
+
+fn omnishell_cmd(cmd: &str, mode: &str) -> std::process::Output {
+    std::process::Command::new("./target/debug/omnishell")
+        .args(["--mode", mode, "-c", cmd])
+        .output()
+        .expect("failed to run omnishell")
+}
+
+#[test]
+fn test_scripting_if_then() {
+    let out = omnishell_cmd("if true; then echo YES; fi", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("YES"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_if_else() {
+    let out = omnishell_cmd("if false; then echo NO; else echo YES; fi", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("YES"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_for_loop() {
+    let out = omnishell_cmd("for x in a b c; do echo item: $x; done", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("item: a"));
+    assert!(stdout.contains("item: b"));
+    assert!(stdout.contains("item: c"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_while_break() {
+    let out = omnishell_cmd("while true; do echo once; break; done", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("once"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_case_esac() {
+    let out = omnishell_cmd("case hello in hi) echo HI ;; hello) echo HELLO ;; esac", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("HELLO"));
+    assert!(!stdout.contains("HI"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_case_glob() {
+    let out = omnishell_cmd("case test.txt in *.txt) echo TEXT ;; *) echo OTHER ;; esac", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("TEXT"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_pipe() {
+    let out = omnishell_cmd("echo hello | tr a-z A-Z", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("HELLO"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_and_chain() {
+    let out = omnishell_cmd("true && echo PASS", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("PASS"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_or_chain() {
+    let out = omnishell_cmd("false || echo FALLBACK", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("FALLBACK"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_cmd_substitution() {
+    let out = omnishell_cmd("echo result: $(echo hello)", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("result: hello"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_arithmetic() {
+    let out = omnishell_cmd("echo $((10 * 5 + 3))", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("53"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_var_assignment() {
+    let out = omnishell_cmd("x=world; echo hello $x", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("hello world"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_test_builtin() {
+    let out = omnishell_cmd("if [ 5 -gt 3 ]; then echo BIGGER; fi", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("BIGGER"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_test_file_flag() {
+    let out = omnishell_cmd("[ -f /etc/hostname ] && echo EXISTS", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("EXISTS"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_function_def() {
+    let out = omnishell_cmd("greet() { echo hello; }; greet", "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("hello"));
+    assert!(out.status.success());
+}
+
+#[test]
+fn test_scripting_acl_kids_blocks_sudo() {
+    let out = omnishell_cmd("sudo bash", "kids");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not on the allowlist"));
+    assert_eq!(out.status.code(), Some(126));
+}
+
+#[test]
+fn test_scripting_acl_kids_allows_exit() {
+    let out = omnishell_cmd("exit", "kids");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("not on the allowlist"));
+}
+
+#[test]
+fn test_scripting_acl_kids_allows_git_status() {
+    let out = omnishell_cmd("git status", "kids");
+    // git status may fail (not a git repo) but shouldn't be blocked by ACL
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("not on the allowlist"));
+}
+
+#[test]
+fn test_scripting_acl_agent_blocks_sudo() {
+    let out = omnishell_cmd("sudo bash", "agent");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("blocked"));
+    assert_eq!(out.status.code(), Some(126));
+}
+
+#[test]
+fn test_scripting_acl_admin_allows_all() {
+    let out = omnishell_cmd("true", "admin");
+    assert!(out.status.success());
+}
