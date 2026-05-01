@@ -222,7 +222,7 @@ fn run_interactive_shell(mode: Mode, theme: &Theme) {
         || -> shrs_utils::StyledBuf { styled_buf!() },
     );
 
-    let completer = omnishell::completion::CompletionEngine::new();
+    let completer = omnishell::completion::CompletionEngine::new(mode);
 
     let myshell = ShellBuilder::default()
         .with_lang(omnishell::lang::OmniShellLang::default())

@@ -17,17 +17,24 @@ pub struct CompletionEngine {
     path_commands: HashSet<String>,
     /// Built-in command names.
     builtin_commands: HashSet<String>,
+    /// Active mode for profile-aware filtering.
+    mode: Mode,
+    /// Pre-built ACL engine for the mode.
+    acl: AclEngine,
 }
 
 impl CompletionEngine {
-    /// Create a new completion engine.
-    pub fn new() -> Self {
+    /// Create a new completion engine for the given mode.
+    pub fn new(mode: Mode) -> Self {
         let path_commands = scan_path();
         let builtin_commands = builtin_names();
+        let acl = AclEngine::new(mode);
 
         Self {
             path_commands,
             builtin_commands,
+            mode,
+            acl,
         }
     }
 
@@ -112,7 +119,7 @@ impl CompletionEngine {
 
 impl Default for CompletionEngine {
     fn default() -> Self {
-        Self::new()
+        Self::new(Mode::Admin)
     }
 }
 
@@ -152,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_complete_builtin_prefix() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Admin);
         let acl = AclEngine::new(Mode::Admin);
         let results = engine.complete("un", Mode::Admin, &acl);
         assert!(results.contains(&"undo".to_string()));
@@ -160,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_complete_ai_builtin() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Admin);
         let acl = AclEngine::new(Mode::Admin);
         let results = engine.complete("a", Mode::Admin, &acl);
         assert!(results.contains(&"ai".to_string()));
@@ -169,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_complete_kids_mode_restricted() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Kids);
         let acl = AclEngine::new(Mode::Kids);
         let results = engine.complete("", Mode::Kids, &acl);
 
@@ -184,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_complete_admin_mode_has_path() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Admin);
         let acl = AclEngine::new(Mode::Admin);
         let results = engine.complete("ls", Mode::Admin, &acl);
 
@@ -194,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_complete_args_file_path() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Admin);
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("test_file.txt"), "").unwrap();
         std::fs::write(dir.path().join("test_other.txt"), "").unwrap();
@@ -209,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_all_commands_non_empty() {
-        let engine = CompletionEngine::new();
+        let engine = CompletionEngine::new(Mode::Admin);
         let acl = AclEngine::new(Mode::Admin);
         let commands = engine.all_commands(Mode::Admin, &acl);
         // Should at minimum have builtins
@@ -231,11 +238,8 @@ mod tests {
 /// shrs Completer trait implementation for mode-aware tab completion.
 impl shrs::prelude::Completer for CompletionEngine {
     fn complete(&self, ctx: &shrs::prelude::CompletionCtx) -> Vec<shrs::prelude::Completion> {
-        // Default to admin mode for completion (ACL filtering happens at eval time)
-        let acl = crate::acl::AclEngine::new(crate::profile::Mode::Admin);
-
         let partial = ctx.cur_word().map(|s| s.as_str()).unwrap_or("");
-        let candidates = self.complete(partial, crate::profile::Mode::Admin, &acl);
+        let candidates = self.complete(partial, self.mode, &self.acl);
 
         candidates.into_iter().map(|c| shrs::prelude::Completion {
             add_space: true,
