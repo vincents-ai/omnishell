@@ -447,7 +447,7 @@ fn test_scripting_test_builtin() {
 
 #[test]
 fn test_scripting_test_file_flag() {
-    let out = omnishell_cmd("[ -f /etc/hostname ] && echo EXISTS", "admin");
+    let out = omnishell_cmd("[ -f /etc/passwd ] && echo EXISTS", "admin");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("EXISTS"));
     assert!(out.status.success());

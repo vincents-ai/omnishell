@@ -54,8 +54,11 @@
             ZLIB_NO_PKG_CONFIG = "1";
           };
 
-          # Integration tests need the built binary — skip them in checkPhase
-          checkFlags = ["--skip" "test_scripting"];
+          # Integration tests need the built binary.
+          # In nix checkPhase, the binary is at target/<profile>/omnishell.
+          preCheck = ''
+            export OMNISHELL_BIN="$(find target -name omnishell -type f | head -1)"
+          '';
         };
       }
     );

@@ -148,15 +148,14 @@ fn execute_single_command(
     // Execute: use POSIX sh for compound command evaluation in non-interactive mode.
     // The interactive shell uses OmniShellLang directly — no sh delegation.
     let start = std::time::Instant::now();
-    let status = std::process::Command::new("/usr/bin/env")
-        .arg("sh")
+    let status = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .status()
         .unwrap_or_else(|e| {
             match e.kind() {
                 std::io::ErrorKind::NotFound => {
-                    eprintln!("omnishell: sh not found");
+                    eprintln!("omnishell: sh not found in PATH");
                     std::process::exit(127);
                 }
                 std::io::ErrorKind::PermissionDenied => {
