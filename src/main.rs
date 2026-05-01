@@ -205,13 +205,24 @@ fn run_interactive_shell(mode: Mode, theme: &Theme) {
         move || -> shrs_utils::StyledBuf {
             let cwd = shrs::readline::prompt::top_pwd();
 
-            // TODO: wire git branch detection via gix when shell context tracks cwd
+            // Git branch detection via gix
+            let git_branch = gix::open(&cwd)
+                .ok()
+                .and_then(|repo| {
+                    let name = repo.head_name().ok()??;
+                    Some(name.shorten().to_string())
+                });
+            let branch_str = match &git_branch {
+                Some(b) => format!(" ({b})"),
+                None => String::new(),
+            };
+
             let rendered = prompt_template
                 .replace("{user}", &user)
                 .replace("{host}", &short_host)
                 .replace("{cwd}", &cwd)
                 .replace("{mode}", &theme_name)
-                .replace("{git_branch}", "")
+                .replace("{git_branch}", &branch_str)
                 .replace("{emoji}", "");
 
             styled_buf!(
