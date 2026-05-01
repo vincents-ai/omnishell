@@ -335,7 +335,7 @@ fn omnishell_cmd(cmd: &str, mode: &str) -> std::process::Output {
     std::process::Command::new(&omnishell_path)
         .args(["--mode", mode, "-c", cmd])
         .output()
-        .unwrap_or_else(|e| panic!("failed to run omnishell at {}: {}", omnishell_path, e))
+        .unwrap_or_else(|e| panic!("failed to run omnishell at {omnishell_path}: {e}"))
 }
 
 // --- Redirect Integration Tests ---
@@ -345,7 +345,7 @@ fn test_redirect_write() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out.txt");
     let path_str = path.to_str().unwrap();
-    let out = omnishell_cmd(&format!("echo REDIRECTED > {}", path_str), "admin");
+    let out = omnishell_cmd(&format!("echo REDIRECTED > {path_str}"), "admin");
     assert!(out.status.success());
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("REDIRECTED"));
@@ -356,8 +356,8 @@ fn test_redirect_append() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out.txt");
     let path_str = path.to_str().unwrap();
-    omnishell_cmd(&format!("echo first > {}", path_str), "admin");
-    omnishell_cmd(&format!("echo second >> {}", path_str), "admin");
+    omnishell_cmd(&format!("echo first > {path_str}"), "admin");
+    omnishell_cmd(&format!("echo second >> {path_str}"), "admin");
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("first"));
     assert!(content.contains("second"));
@@ -369,7 +369,7 @@ fn test_redirect_read() {
     let path = dir.path().join("in.txt");
     std::fs::write(&path, "hello from file").unwrap();
     let path_str = path.to_str().unwrap();
-    let out = omnishell_cmd(&format!("cat < {}", path_str), "admin");
+    let out = omnishell_cmd(&format!("cat < {path_str}"), "admin");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("hello from file"));
     assert!(out.status.success());
@@ -380,7 +380,7 @@ fn test_redirect_pipe_chain() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("pipe_out.txt");
     let path_str = path.to_str().unwrap();
-    let out = omnishell_cmd(&format!("echo hello | tr a-z A-Z > {}", path_str), "admin");
+    let out = omnishell_cmd(&format!("echo hello | tr a-z A-Z > {path_str}"), "admin");
     assert!(out.status.success());
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("HELLO"));

@@ -221,7 +221,7 @@ impl History {
         let mut file = std::fs::File::create(&self.file_path)?;
         for entry in &self.entries {
             let json = serde_json::to_string(entry)?;
-            writeln!(file, "{}", json)?;
+            writeln!(file, "{json}")?;
         }
 
         Ok(())

@@ -51,7 +51,7 @@ impl Color {
             Color::BrightMagenta => "95".to_string(),
             Color::BrightCyan => "96".to_string(),
             Color::BrightWhite => "97".to_string(),
-            Color::Rgb(r, g, b) => format!("38;2;{};{};{}", r, g, b),
+            Color::Rgb(r, g, b) => format!("38;2;{r};{g};{b}"),
             Color::Default => "39".to_string(),
         }
     }

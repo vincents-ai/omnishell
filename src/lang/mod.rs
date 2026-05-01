@@ -15,15 +15,11 @@ pub use functions::FunctionTable;
 pub use shell_mode::ShellMode;
 
 /// Result of evaluating a command.
+#[derive(Default)]
 struct EvalResult {
     exit_code: i32,
 }
 
-impl Default for EvalResult {
-    fn default() -> Self {
-        Self { exit_code: 0 }
-    }
-}
 
 /// Expand arguments with glob support.
 fn expand_arg(arg: &str) -> Vec<String> {
@@ -112,7 +108,7 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
     for cap in R_DOLLAR_VAR.captures_iter(arg) {
         let full = cap.get(0).unwrap().as_str();
         let var = &cap[1];
-        let val: String = rt.env.get(var).map(|v| v.clone()).unwrap_or_default();
+        let val: String = rt.env.get(var).cloned().unwrap_or_default();
         if let Some(pos) = result.find(full) {
             result = format!("{}{}{}", &result[..pos], val, &result[pos + full.len()..]);
         }
@@ -122,7 +118,7 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
     for cap in R_DOLLAR_BRACE.captures_iter(arg) {
         let full = cap.get(0).unwrap().as_str();
         let var = &cap[1];
-        let val: String = rt.env.get(var).map(|v| v.clone()).unwrap_or_default();
+        let val: String = rt.env.get(var).cloned().unwrap_or_default();
         if let Some(pos) = result.find(full) {
             result = format!("{}{}{}", &result[..pos], val, &result[pos + full.len()..]);
         }

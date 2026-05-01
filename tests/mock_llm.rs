@@ -56,7 +56,7 @@ fn test_llm_client_disabled_returns_graceful_message() {
         LlmResponse::Disabled(msg) => {
             assert!(msg.contains("disabled"), "Should mention disabled state");
         }
-        _ => panic!("Expected Disabled response, got {:?}", response),
+        _ => panic!("Expected Disabled response, got {response:?}"),
     }
 }
 
@@ -132,8 +132,7 @@ fn test_system_prompts_have_sufficient_guidance() {
         let prompt = system_prompt(mode);
         assert!(
             prompt.len() > 50,
-            "{:?} prompt should have meaningful content",
-            mode
+            "{mode:?} prompt should have meaningful content"
         );
     }
 }
@@ -171,9 +170,9 @@ fn test_multiple_queries_dont_panic() {
 
     // Multiple queries in sequence should not panic or hang
     for i in 0..5 {
-        let response = client.query_sync(&format!("query {}", i));
+        let response = client.query_sync(&format!("query {i}"));
         // Just verify we get a response (any variant is fine)
-        let _ = format!("{:?}", response);
+        let _ = format!("{response:?}");
     }
 }
 

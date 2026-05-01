@@ -54,11 +54,10 @@ impl CompletionEngine {
         if mode == Mode::Kids {
             // Kids mode: only allowlist commands from ACL
             for rule in &acl.allowlist {
-                if rule.pattern.starts_with(partial) && !rule.pattern.contains('*') {
-                    if !candidates.contains(&rule.pattern) {
+                if rule.pattern.starts_with(partial) && !rule.pattern.contains('*')
+                    && !candidates.contains(&rule.pattern) {
                         candidates.push(rule.pattern.clone());
                     }
-                }
             }
         } else {
             // Agent/Admin: full PATH scan
@@ -101,7 +100,7 @@ impl CompletionEngine {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.starts_with(&prefix) {
                         let suffix = if entry.path().is_dir() { "/" } else { "" };
-                        candidates.push(format!("{}{}", name, suffix));
+                        candidates.push(format!("{name}{suffix}"));
                     }
                 }
             }
@@ -151,6 +150,26 @@ fn builtin_names() -> HashSet<String> {
         .iter()
         .map(|s| s.to_string())
         .collect()
+}
+
+/// shrs Completer trait implementation for mode-aware tab completion.
+impl shrs::prelude::Completer for CompletionEngine {
+    fn complete(&self, ctx: &shrs::prelude::CompletionCtx) -> Vec<shrs::prelude::Completion> {
+        let partial = ctx.cur_word().map(|s| s.as_str()).unwrap_or("");
+        let candidates = self.complete(partial, self.mode, &self.acl);
+
+        candidates.into_iter().map(|c| shrs::prelude::Completion {
+            add_space: true,
+            display: Some(c.clone()),
+            completion: c,
+            replace_method: shrs::prelude::ReplaceMethod::Replace,
+            comment: None,
+        }).collect()
+    }
+
+    fn register(&mut self, _rule: shrs::prelude::Rule) {
+        // No-op — our completion is ACL-driven, not rule-based
+    }
 }
 
 #[cfg(test)]
@@ -232,25 +251,5 @@ mod tests {
         assert!(names.contains(&String::from("help")));
         assert!(names.contains(&String::from("exit")));
         assert_eq!(names.len(), 11);
-    }
-}
-
-/// shrs Completer trait implementation for mode-aware tab completion.
-impl shrs::prelude::Completer for CompletionEngine {
-    fn complete(&self, ctx: &shrs::prelude::CompletionCtx) -> Vec<shrs::prelude::Completion> {
-        let partial = ctx.cur_word().map(|s| s.as_str()).unwrap_or("");
-        let candidates = self.complete(partial, self.mode, &self.acl);
-
-        candidates.into_iter().map(|c| shrs::prelude::Completion {
-            add_space: true,
-            display: Some(c.clone()),
-            completion: c,
-            replace_method: shrs::prelude::ReplaceMethod::Replace,
-            comment: None,
-        }).collect()
-    }
-
-    fn register(&mut self, _rule: shrs::prelude::Rule) {
-        // No-op — our completion is ACL-driven, not rule-based
     }
 }

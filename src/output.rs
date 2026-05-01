@@ -110,7 +110,7 @@ fn format_admin(output: &CommandOutput) -> String {
 /// Format an error message for the given mode.
 pub fn format_error(message: &str, mode: Mode) -> String {
     match mode {
-        Mode::Kids => format!("❌ {}", message),
+        Mode::Kids => format!("❌ {message}"),
         Mode::Agent => {
             let envelope = JsonEnvelope {
                 result_type: "error".to_string(),
@@ -121,10 +121,10 @@ pub fn format_error(message: &str, mode: Mode) -> String {
                 duration_ms: 0,
             };
             serde_json::to_string(&envelope).unwrap_or_else(|_| {
-                format!(r#"{{"type":"error","stderr":"{}"}}"#, message)
+                format!(r#"{{"type":"error","stderr":"{message}"}}"#)
             })
         }
-        Mode::Admin => format!("error: {}", message),
+        Mode::Admin => format!("error: {message}"),
     }
 }
 

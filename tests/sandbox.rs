@@ -145,7 +145,7 @@ fn test_rlimit_resource_serde_variants() {
     ] {
         let json = serde_json::to_string(&resource).unwrap();
         let parsed: RlimitResource = serde_json::from_str(&json).unwrap();
-        assert!(format!("{:?}", parsed).contains(format!("{:?}", resource).split_whitespace().next().unwrap()));
+        assert!(format!("{parsed:?}").contains(format!("{resource:?}").split_whitespace().next().unwrap()));
     }
 }
 

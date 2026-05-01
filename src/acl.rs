@@ -106,7 +106,7 @@ impl AclEngine {
                     // Check that no argument constraint is violated
                     let mut all_args_ok = true;
                     for constraint in &rule.args {
-                        if let Some(_) = check_arg_constraint(args, constraint, cmd_name, &rule.reason) {
+                        if check_arg_constraint(args, constraint, cmd_name, &rule.reason).is_some() {
                             all_args_ok = false;
                             break;
                         }
@@ -229,8 +229,8 @@ fn matches_pattern(cmd: &str, pattern: &str) -> bool {
 }
 
 /// Check a single argument constraint. Returns Some(Deny) if violated.
-fn check_arg_constraint<'a>(
-    args: &'a [String],
+fn check_arg_constraint(
+    args: &[String],
     constraint: &ArgConstraint,
     cmd: &str,
     reason: &str,
@@ -240,8 +240,7 @@ fn check_arg_constraint<'a>(
             let full_args = args.join(" ");
             if full_args.contains(forbidden) {
                 return Some(Verdict::Deny(format!(
-                    "Command '{}' blocked: {} (forbidden argument: {})",
-                    cmd, reason, forbidden
+                    "Command '{cmd}' blocked: {reason} (forbidden argument: {forbidden})"
                 )));
             }
             None
@@ -251,8 +250,7 @@ fn check_arg_constraint<'a>(
             if let Ok(pattern) = Pattern::new(pattern_str) {
                 if pattern.matches(&full_args) {
                     return Some(Verdict::Deny(format!(
-                        "Command '{}' blocked: {} (argument pattern matched: {})",
-                        cmd, reason, pattern_str
+                        "Command '{cmd}' blocked: {reason} (argument pattern matched: {pattern_str})"
                     )));
                 }
             }
@@ -275,7 +273,7 @@ fn pattern_rule(cmd: &str, subcmd: &str, reason: &str) -> AclRule {
     AclRule {
         // This allows "git status", "git log" but not "git push"
         pattern: cmd.to_string(),
-        args: vec![ArgConstraint::MustMatchGlob(format!("{}*", subcmd))],
+        args: vec![ArgConstraint::MustMatchGlob(format!("{subcmd}*"))],
         reason: reason.to_string(),
     }
 }

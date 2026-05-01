@@ -213,7 +213,7 @@ impl Sandbox {
         // Create sandbox root if it doesn't exist
         if !self.config.root_dir.exists() {
             std::fs::create_dir_all(&self.config.root_dir)
-                .map_err(|e| format!("Failed to create sandbox root: {}", e))?;
+                .map_err(|e| format!("Failed to create sandbox root: {e}"))?;
         }
 
         // TODO: Actual namespace setup using nix crate

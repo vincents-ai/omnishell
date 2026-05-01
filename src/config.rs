@@ -50,9 +50,9 @@ fn load_from_file(path: &Path) -> Result<OmniShellConfig> {
 
     match path.extension().and_then(|e| e.to_str()) {
         Some("json") => serde_json::from_str(&content)
-            .map_err(|e| OmniShellError::Config(format!("JSON parse error: {}", e))),
+            .map_err(|e| OmniShellError::Config(format!("JSON parse error: {e}"))),
         Some("toml") => toml::from_str(&content)
-            .map_err(|e| OmniShellError::Config(format!("TOML parse error: {}", e))),
+            .map_err(|e| OmniShellError::Config(format!("TOML parse error: {e}"))),
         _ => Err(OmniShellError::Config(format!(
             "Unknown config format: {} (expected .toml or .json)",
             path.display()

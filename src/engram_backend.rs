@@ -137,7 +137,7 @@ impl OmniShellTool {
                 let (stdout, exit_code) = match result {
                     BuiltinResult::Success(msg) => (msg, 0),
                     BuiltinResult::Error(msg) => (msg, 1),
-                    BuiltinResult::SwitchMode(mode) => (format!("Switched to {} mode", mode), 0),
+                    BuiltinResult::SwitchMode(mode) => (format!("Switched to {mode} mode"), 0),
                     BuiltinResult::Exit => ("Shell exit requested".to_string(), 0),
                 };
 
@@ -160,7 +160,7 @@ impl OmniShellTool {
         ShellToolOutput {
             allowed: true,
             command: input.command,
-            stdout: format!("(command queued: {})", cmd),
+            stdout: format!("(command queued: {cmd})"),
             stderr: String::new(),
             exit_code: Some(0),
             duration_ms: start.elapsed().as_millis() as u64,
@@ -172,7 +172,7 @@ impl OmniShellTool {
     /// Execute from raw JSON string input.
     pub fn execute_json(&self, json_input: &str) -> Result<ShellToolOutput, String> {
         let input: ShellToolInput = serde_json::from_str(json_input)
-            .map_err(|e| format!("Invalid input JSON: {}", e))?;
+            .map_err(|e| format!("Invalid input JSON: {e}"))?;
         Ok(self.execute(input))
     }
 }
@@ -359,7 +359,7 @@ impl EngramContext {
         let output = std::process::Command::new(&self.cli_path)
             .args(["task", "show", task_id])
             .output()
-            .map_err(|e| format!("Failed to run engram: {}", e))?;
+            .map_err(|e| format!("Failed to run engram: {e}"))?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -377,7 +377,7 @@ impl EngramContext {
         let output = std::process::Command::new(&self.cli_path)
             .args(["task", "list", "--limit", &limit.to_string()])
             .output()
-            .map_err(|e| format!("Failed to run engram: {}", e))?;
+            .map_err(|e| format!("Failed to run engram: {e}"))?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -395,7 +395,7 @@ impl EngramContext {
         let output = std::process::Command::new(&self.cli_path)
             .args(["next"])
             .output()
-            .map_err(|e| format!("Failed to run engram: {}", e))?;
+            .map_err(|e| format!("Failed to run engram: {e}"))?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())

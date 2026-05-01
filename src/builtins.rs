@@ -56,16 +56,13 @@ fn cmd_ai(args: &[String], mode: Mode) -> BuiltinResult {
 
     match mode {
         Mode::Kids => BuiltinResult::Success(format!(
-            "🤖 (Kids tutor mode) You asked: \"{}\". Let me think about that...",
-            prompt
+            "🤖 (Kids tutor mode) You asked: \"{prompt}\". Let me think about that..."
         )),
         Mode::Agent => BuiltinResult::Success(format!(
-            "{{\"type\":\"llm_request\",\"prompt\":\"{}\",\"mode\":\"agent\"}}",
-            prompt
+            "{{\"type\":\"llm_request\",\"prompt\":\"{prompt}\",\"mode\":\"agent\"}}"
         )),
         Mode::Admin => BuiltinResult::Success(format!(
-            "[LLM] Query: {}",
-            prompt
+            "[LLM] Query: {prompt}"
         )),
     }
 }
@@ -84,7 +81,7 @@ fn cmd_undo(args: &[String]) -> BuiltinResult {
     } else {
         args[0].parse::<usize>().unwrap_or(1)
     };
-    BuiltinResult::Success(format!("Undoing {} command(s)...", count))
+    BuiltinResult::Success(format!("Undoing {count} command(s)..."))
 }
 
 /// `redo` — Redo last undone command.
@@ -94,7 +91,7 @@ fn cmd_redo(args: &[String]) -> BuiltinResult {
     } else {
         args[0].parse::<usize>().unwrap_or(1)
     };
-    BuiltinResult::Success(format!("Redoing {} command(s)...", count))
+    BuiltinResult::Success(format!("Redoing {count} command(s)..."))
 }
 
 /// `allow` — Add command to allowlist.
@@ -116,7 +113,7 @@ fn cmd_allow(args: &[String], acl: &mut AclEngine) -> BuiltinResult {
         reason,
     });
 
-    BuiltinResult::Success(format!("Added '{}' to allowlist", pattern))
+    BuiltinResult::Success(format!("Added '{pattern}' to allowlist"))
 }
 
 /// `block` — Add command to blocklist.
@@ -138,13 +135,13 @@ fn cmd_block(args: &[String], acl: &mut AclEngine) -> BuiltinResult {
         reason,
     });
 
-    BuiltinResult::Success(format!("Added '{}' to blocklist", pattern))
+    BuiltinResult::Success(format!("Added '{pattern}' to blocklist"))
 }
 
 /// `mode` — Show or switch execution mode.
 fn cmd_mode(args: &[String], current: Mode) -> BuiltinResult {
     if args.is_empty() {
-        return BuiltinResult::Success(format!("Current mode: {}", current));
+        return BuiltinResult::Success(format!("Current mode: {current}"));
     }
 
     let new_mode = match args[0].to_lowercase().as_str() {
@@ -155,7 +152,7 @@ fn cmd_mode(args: &[String], current: Mode) -> BuiltinResult {
     };
 
     if new_mode == current {
-        return BuiltinResult::Success(format!("Already in {} mode", new_mode));
+        return BuiltinResult::Success(format!("Already in {new_mode} mode"));
     }
 
     BuiltinResult::SwitchMode(new_mode)

@@ -49,14 +49,14 @@ fn main() {
     // Load configuration
     let config_path = args.config.as_deref().map(Path::new);
     let config = load_config(config_path).unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to load config: {}. Using defaults.", e);
+        eprintln!("Warning: Failed to load config: {e}. Using defaults.");
         OmniShellConfig::default()
     });
 
     // Resolve profile
     let profile_name = resolve_profile(&config, args.profile.as_deref());
     let profile = config.profile.get(&profile_name).unwrap_or_else(|| {
-        eprintln!("Warning: Profile '{}' not found. Using default.", profile_name);
+        eprintln!("Warning: Profile '{profile_name}' not found. Using default.");
         config.profile.get("default").expect("default profile always exists")
     });
 
@@ -125,13 +125,13 @@ fn execute_single_command(
             let args = &tokens[1..];
             if let Some(result) = builtins::dispatch(cmd, args, mode, &mut acl) {
                 match result {
-                    omnishell::builtins::BuiltinResult::Success(msg) => println!("{}", msg),
+                    omnishell::builtins::BuiltinResult::Success(msg) => println!("{msg}"),
                     omnishell::builtins::BuiltinResult::Error(msg) => {
                         eprintln!("{}", format_error(&msg, mode));
                         std::process::exit(1);
                     }
                     omnishell::builtins::BuiltinResult::SwitchMode(new_mode) => {
-                        eprintln!("Mode switch to {} ignored in non-interactive mode", new_mode);
+                        eprintln!("Mode switch to {new_mode} ignored in non-interactive mode");
                     }
                     omnishell::builtins::BuiltinResult::Exit => return,
                 }
@@ -163,7 +163,7 @@ fn execute_single_command(
                     std::process::exit(126);
                 }
                 _ => {
-                    eprintln!("omnishell: execution failed: {}", e);
+                    eprintln!("omnishell: execution failed: {e}");
                     std::process::exit(1);
                 }
             }
@@ -224,7 +224,7 @@ fn run_interactive_shell(mode: Mode, theme: &Theme) {
     let completer = omnishell::completion::CompletionEngine::new(mode);
 
     let myshell = ShellBuilder::default()
-        .with_lang(omnishell::lang::OmniShellLang::default())
+        .with_lang(omnishell::lang::OmniShellLang)
         .with_state(omnishell::lang::FunctionTable::new())
         .with_state(omnishell::lang::ShellMode(mode))
         .with_state(omnishell::history::History::new(mode, omnishell::history::HistoryConfig::default()))
@@ -242,7 +242,7 @@ fn resolve_profile(config: &OmniShellConfig, cli_profile: Option<&str>) -> Strin
         if config.profile.contains_key(name) {
             return name.to_string();
         }
-        eprintln!("omnishell: requested profile '{}' not found, falling back.", name);
+        eprintln!("omnishell: requested profile '{name}' not found, falling back.");
     }
 
     // 2. Check $USER binding

@@ -133,7 +133,7 @@ impl LlmClient {
         }
 
         let system = system_prompt(self.mode);
-        let full_prompt = format!("{}\n\nUser: {}", system, prompt);
+        let full_prompt = format!("{system}\n\nUser: {prompt}");
 
         // TODO: Wire to vincents-llm once the API is stable
         // For now, return a graceful degradation response

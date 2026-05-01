@@ -199,12 +199,8 @@ impl OmniShellPlugin for EchoPlugin {
         }
     }
 
-    fn on_before_command(&self, command: &str, _ctx: &PluginContext) -> PluginCommandAction {
-        if command.starts_with("echo ") {
-            PluginCommandAction::Allow
-        } else {
-            PluginCommandAction::Allow
-        }
+    fn on_before_command(&self, _command: &str, _ctx: &PluginContext) -> PluginCommandAction {
+        PluginCommandAction::Allow
     }
 }
 
@@ -225,7 +221,7 @@ impl OmniShellPlugin for BlocklistPlugin {
     fn on_before_command(&self, command: &str, _ctx: &PluginContext) -> PluginCommandAction {
         let cmd_name = command.split_whitespace().next().unwrap_or("");
         if self.blocked.iter().any(|b| b == cmd_name) {
-            PluginCommandAction::Deny(format!("Command '{}' blocked by blocklist plugin", cmd_name))
+            PluginCommandAction::Deny(format!("Command '{cmd_name}' blocked by blocklist plugin"))
         } else {
             PluginCommandAction::Allow
         }
@@ -235,6 +231,12 @@ impl OmniShellPlugin for BlocklistPlugin {
 /// A plugin that logs all commands.
 pub struct AuditPlugin {
     pub log: std::sync::Mutex<Vec<String>>,
+}
+
+impl Default for AuditPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AuditPlugin {
@@ -256,7 +258,7 @@ impl OmniShellPlugin for AuditPlugin {
 
     fn on_after_command(&self, command: &str, exit_code: i32, _ctx: &PluginContext) {
         if let Ok(mut log) = self.log.lock() {
-            log.push(format!("{} [exit={}]", command, exit_code));
+            log.push(format!("{command} [exit={exit_code}]"));
         }
     }
 }

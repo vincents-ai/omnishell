@@ -73,7 +73,7 @@ impl SnapshotEngine {
 
         let cmd_lower = command.trim().to_lowercase();
         mutating_prefixes.iter().any(|prefix| {
-            cmd_lower == *prefix || cmd_lower.starts_with(&format!("{} ", prefix))
+            cmd_lower == *prefix || cmd_lower.starts_with(&format!("{prefix} "))
         })
     }
 
@@ -81,7 +81,7 @@ impl SnapshotEngine {
     pub fn pre_execution_snapshot(&mut self, command: &str) -> Result<Snapshot> {
         let timestamp = now_secs();
 
-        let commit_id = self.try_create_commit(&format!("omnishell: PRE | {}", command));
+        let commit_id = self.try_create_commit(&format!("omnishell: PRE | {command}"));
 
         let snapshot = Snapshot {
             commit_id,
@@ -100,8 +100,7 @@ impl SnapshotEngine {
         let timestamp = now_secs();
 
         let commit_id = self.try_create_commit(&format!(
-            "omnishell: POST | {} | exit={}",
-            command, exit_code
+            "omnishell: POST | {command} | exit={exit_code}"
         ));
 
         let snapshot = Snapshot {

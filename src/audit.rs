@@ -80,7 +80,7 @@ impl AuditLogger {
         let log_dir = config
             .log_dir
             .clone()
-            .unwrap_or_else(|| default_audit_dir());
+            .unwrap_or_else(default_audit_dir);
 
         let filename = match mode {
             Mode::Kids => "audit_kids.jsonl",
@@ -146,7 +146,7 @@ impl AuditLogger {
             .append(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{}", json)?;
+        writeln!(file, "{json}")?;
 
         // TODO: file rotation based on max_file_size
 
@@ -308,7 +308,7 @@ mod tests {
         let logger = AuditLogger::new(Mode::Admin, config);
 
         for i in 0..5 {
-            let entry = AuditLogger::entry_for(&format!("cmd{}", i), Mode::Admin).build();
+            let entry = AuditLogger::entry_for(&format!("cmd{i}"), Mode::Admin).build();
             logger.log(entry).unwrap();
         }
 

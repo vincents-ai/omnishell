@@ -127,7 +127,7 @@ mod acl_enforcement {
         // Then all should be allowed
         for cmd in safe_commands {
             assert_eq!(acl.evaluate(cmd), Verdict::Allow,
-                "Kids mode should allow '{}'", cmd);
+                "Kids mode should allow '{cmd}'");
         }
     }
 
@@ -144,7 +144,7 @@ mod acl_enforcement {
         // Then all should be denied
         for cmd in dangerous_commands {
             assert!(matches!(acl.evaluate(cmd), Verdict::Deny(_)),
-                "Kids mode should deny '{}'", cmd);
+                "Kids mode should deny '{cmd}'");
         }
     }
 

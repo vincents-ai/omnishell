@@ -31,7 +31,7 @@ pub fn generate_cards(config: &OmniShellConfig) -> Vec<ProfileCard> {
         let (emoji, desc) = match profile.mode {
             Mode::Kids => ("🧒", format!(
                 "Kids Mode — Learn terminal!{}",
-                profile.age.map(|a| format!(" (Age {})", a)).unwrap_or_default()
+                profile.age.map(|a| format!(" (Age {a})")).unwrap_or_default()
             )),
             Mode::Agent => ("🤖", "Agent Mode — AI coding assistant".to_string()),
             Mode::Admin => ("⚡", "Admin Mode — Full access".to_string()),
@@ -58,7 +58,7 @@ pub fn generate_cards(config: &OmniShellConfig) -> Vec<ProfileCard> {
 /// Render the profile picker to stdout.
 pub fn render_picker(cards: &[ProfileCard]) -> String {
     let mut out = String::new();
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("╔══════════════════════════════════════╗\n");
     out.push_str("║       🐚 Welcome to OmniShell!       ║\n");
     out.push_str("║     Choose your profile to start      ║\n");
@@ -94,7 +94,7 @@ pub fn pick_profile(config: &OmniShellConfig) -> Option<String> {
     }
 
     let picker_text = render_picker(&cards);
-    print!("{}", picker_text);
+    print!("{picker_text}");
     io::stdout().flush().ok()?;
 
     // Read a single character

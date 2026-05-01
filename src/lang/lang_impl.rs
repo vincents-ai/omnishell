@@ -7,20 +7,7 @@ use shrs_job::{JobManager, run_external_command, Process, ProcessGroup, Output, 
 use shrs_lang::{Lexer, Parser, Token, ast};
 
 use super::{expand_arg, envsubst, EvalResult};
-///
-/// Implements the full POSIX shell grammar:
-/// - Simple commands with glob expansion and env substitution
-/// - Pipes (`cmd1 | cmd2`)
-/// - `&&` and `||` compound commands
-/// - `if`/`elif`/`else`/`fi`
-/// - `while`/`until`/`do`/`done`
-/// - `for`/`in`/`do`/`done` with glob expansion
-/// - `case`/`esac` with glob pattern matching
-/// - `$(cmd)` command substitution
-/// - `break`/`continue` in loops
-/// - Subshells `(cmd)`
-/// - Background `&` and sequential `;` lists
-/// - File redirections `<`, `>`, `>>`
+
 /// OmniShell's POSIX-compatible shell language evaluator.
 ///
 /// Implements the full POSIX shell grammar with ACL enforcement.
@@ -55,7 +42,7 @@ impl Lang for OmniShellLang {
                     let mut history = states.get_mut::<crate::history::History>();
                     history.push(&line, result.exit_code, None);
                 }
-                Ok(CmdOutput::from_status(result.exit_code as i32))
+                Ok(CmdOutput::from_status(result.exit_code))
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -63,7 +50,7 @@ impl Lang for OmniShellLang {
                     return Ok(CmdOutput::success());
                 }
                 if let Some(cmd) = extract_simple_cmd_name(&parsed) {
-                    eprintln!("omnishell: command not found: {}", cmd);
+                    eprintln!("omnishell: command not found: {cmd}");
                     return Ok(CmdOutput::from_status(127));
                 }
                 eprintln!("eval error: {e}");
@@ -105,11 +92,10 @@ impl Lang for OmniShellLang {
                 }
                 Token::WORD(w) => {
                     let chars: Vec<char> = w.chars().collect();
-                    if chars.first() == Some(&'\'') || chars.first() == Some(&'"') {
-                        if chars.len() == 1 || chars.first() != chars.last() {
+                    if (chars.first() == Some(&'\'') || chars.first() == Some(&'"'))
+                        && (chars.len() == 1 || chars.first() != chars.last()) {
                             return true;
                         }
-                    }
                 }
                 _ => {}
             }
@@ -341,14 +327,14 @@ fn process_redirects(
         match redirect.mode {
             ast::RedirectMode::Read => {
                 let file = File::open(&filename)
-                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                    .map_err(|e| anyhow::anyhow!("cannot open '{filename}': {e}"))?;
                 if fd_n == 0 {
                     stdin = JobStdin::File(file);
                 }
             }
             ast::RedirectMode::Write => {
                 let file = File::create(&filename)
-                    .map_err(|e| anyhow::anyhow!("cannot create '{}': {}", filename, e))?;
+                    .map_err(|e| anyhow::anyhow!("cannot create '{filename}': {e}"))?;
                 if fd_n == 1 {
                     stdout = Output::File(file);
                 } else if fd_n == 2 {
@@ -360,7 +346,7 @@ fn process_redirects(
                     .append(true)
                     .create(true)
                     .open(&filename)
-                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                    .map_err(|e| anyhow::anyhow!("cannot open '{filename}': {e}"))?;
                 if fd_n == 1 {
                     stdout = Output::File(file);
                 } else if fd_n == 2 {
@@ -372,7 +358,7 @@ fn process_redirects(
                     .read(true)
                     .append(true)
                     .open(&filename)
-                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                    .map_err(|e| anyhow::anyhow!("cannot open '{filename}': {e}"))?;
                 if fd_n == 0 {
                     stdin = JobStdin::File(file);
                 }
@@ -409,8 +395,9 @@ fn process_redirects(
                     .read(true)
                     .write(true)
                     .create(true)
+                    .truncate(true)
                     .open(&filename)
-                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                    .map_err(|e| anyhow::anyhow!("cannot open '{filename}': {e}"))?;
                 if fd_n == 0 {
                     stdin = JobStdin::File(file);
                 } else if fd_n == 1 {
@@ -495,7 +482,7 @@ fn eval_simple(
 
     // Check shrs builtins
     for (builtin_name, builtin_cmd) in sh.builtins.iter() {
-        if builtin_name == &cmd_name {
+        if builtin_name == cmd_name {
             let _ = builtin_cmd.run(sh, states, &cmd_args);
             return Ok(EvalResult { exit_code: 0 });
         }
@@ -530,7 +517,7 @@ fn eval_simple(
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!("__notfound__")
         } else {
-            anyhow::anyhow!("execution error: {}", e)
+            anyhow::anyhow!("execution error: {e}")
         }
     })?;
 
@@ -542,7 +529,7 @@ fn eval_simple(
     let job_id = job_mgr.create_job(cmd_name, proc_group);
     let status = job_mgr
         .put_job_in_foreground(Some(job_id), false)
-        .map_err(|e| anyhow::anyhow!("job error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
 
     let exit_code = status
         .and_then(|s| s.code())
@@ -580,12 +567,15 @@ fn eval_pipeline(
     let job_id = job_mgr.create_job("pipeline", proc_group);
     let status = job_mgr
         .put_job_in_foreground(Some(job_id), false)
-        .map_err(|e| anyhow::anyhow!("job error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
 
     let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
     rt.exit_status = exit_code;
     Ok(EvalResult { exit_code })
 }
+
+/// Result type for eval_to_procs functions.
+type ProcsResult = anyhow::Result<(Vec<Box<dyn Process>>, Option<u32>)>;
 
 /// Convert AST to procs.
 fn eval_to_procs(
@@ -594,7 +584,7 @@ fn eval_to_procs(
     job_mgr: &mut JobManager,
     rt: &mut shrs::prelude::Runtime,
     cmd: &ast::Command,
-) -> anyhow::Result<(Vec<Box<dyn Process>>, Option<u32>)> {
+) -> ProcsResult {
     eval_to_procs_with_io(sh, states, job_mgr, rt, cmd, None, None)
 }
 
@@ -607,7 +597,7 @@ fn eval_to_procs_with_io(
     cmd: &ast::Command,
     stdin: Option<JobStdin>,
     stdout: Option<Output>,
-) -> anyhow::Result<(Vec<Box<dyn Process>>, Option<u32>)> {
+) -> ProcsResult {
     match cmd {
         ast::Command::Simple { args, .. } => {
             let mut expanded = Vec::new();
@@ -672,7 +662,7 @@ fn run_job_bg(
     let job_id = job_mgr.create_job("", proc_group);
     job_mgr
         .put_job_in_background(Some(job_id), false)
-        .map_err(|e| anyhow::anyhow!("job error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
     Ok(())
 }
 
