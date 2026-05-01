@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use crate::theme::Theme;
 
 /// Top-level configuration container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +122,42 @@ pub struct Profile {
     /// Per-profile ACL overrides.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acl: Option<AclConfig>,
+
+    /// Per-profile theme overrides (prompt, colors, emoji).
+    /// If not set, the mode default theme is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOverride>,
+}
+
+/// Theme overrides for a profile.
+/// Any field set here replaces the mode default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeOverride {
+    /// PS1 prompt template.
+    /// Supports: {user}, {host}, {cwd}, {mode}, {git_branch}, {emoji}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+
+    /// Mode emoji.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+}
+
+impl Profile {
+    /// Build the resolved Theme for this profile, applying overrides
+    /// on top of the mode default.
+    pub fn theme(&self) -> Theme {
+        let mut theme = Theme::for_mode(self.mode);
+        if let Some(ref overrides) = self.theme {
+            if let Some(ref prompt) = overrides.prompt {
+                theme.prompt = prompt.clone();
+            }
+            if let Some(ref emoji) = overrides.emoji {
+                theme.emoji = Some(emoji.clone());
+            }
+        }
+        theme
+    }
 }
 
 /// Execution mode.
@@ -228,6 +265,53 @@ max_tokens = 256
         assert_eq!(parsed.provider, config.provider);
         assert_eq!(parsed.model, config.model);
         assert!((parsed.temperature - config.temperature).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_profile_theme_default() {
+        let profile = Profile::default();
+        let theme = profile.theme();
+        assert_eq!(theme.name, "admin");
+        assert!(theme.prompt.contains("{user}@{host}"));
+    }
+
+    #[test]
+    fn test_profile_theme_prompt_override() {
+        let mut profile = Profile::default();
+        profile.theme = Some(ThemeOverride {
+            prompt: Some("custom> ".to_string()),
+            emoji: None,
+        });
+        let theme = profile.theme();
+        assert_eq!(theme.prompt, "custom> ");
+    }
+
+    #[test]
+    fn test_profile_theme_emoji_override() {
+        let mut profile = Profile { mode: Mode::Kids, ..Default::default() };
+        profile.theme = Some(ThemeOverride {
+            prompt: None,
+            emoji: Some("🎮".to_string()),
+        });
+        let theme = profile.theme();
+        assert_eq!(theme.emoji.as_deref(), Some("🎮"));
+        // Prompt should still be the kids default
+        assert!(theme.prompt.contains("🐚"));
+    }
+
+    #[test]
+    fn test_theme_override_deserialization() {
+        let toml_str = r#"
+mode = "agent"
+[theme]
+prompt = "[{mode}] {cwd}> "
+emoji = "🛸"
+"#;
+        let profile: Profile = toml::from_str(toml_str).unwrap();
+        assert_eq!(profile.mode, Mode::Agent);
+        let theme = profile.theme();
+        assert_eq!(theme.prompt, "[{mode}] {cwd}> ");
+        assert_eq!(theme.emoji.as_deref(), Some("🛸"));
     }
 
     #[test]

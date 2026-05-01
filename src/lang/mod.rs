@@ -89,16 +89,21 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
     }
 
     // Command substitution: $(command)
+    // Execute directly via fork+exec — no sh -c.
     for cap in R_CMD_SUB.captures_iter(arg) {
         let full = cap.get(0).unwrap().as_str();
         let cmd = &cap[1];
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output();
-        let value = match output {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
-            Err(_) => String::new(),
+        let tokens: Vec<&str> = cmd.split_whitespace().collect();
+        let value = if tokens.is_empty() {
+            String::new()
+        } else {
+            match std::process::Command::new(tokens[0])
+                .args(&tokens[1..])
+                .output()
+            {
+                Ok(o) => String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
+                Err(_) => String::new(),
+            }
         };
         result = result.replace(full, &value);
     }

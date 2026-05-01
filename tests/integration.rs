@@ -330,10 +330,12 @@ fn test_full_mode_switch() {
 // to ensure end-to-end correctness.
 
 fn omnishell_cmd(cmd: &str, mode: &str) -> std::process::Output {
-    std::process::Command::new("./target/debug/omnishell")
+    let omnishell_path = std::env::var("OMNISHELL_BIN")
+        .unwrap_or_else(|_| "./target/debug/omnishell".to_string());
+    std::process::Command::new(&omnishell_path)
         .args(["--mode", mode, "-c", cmd])
         .output()
-        .expect("failed to run omnishell")
+        .unwrap_or_else(|e| panic!("failed to run omnishell at {}: {}", omnishell_path, e))
 }
 
 #[test]

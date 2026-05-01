@@ -117,6 +117,58 @@ api_base = "http://my-llm-host:8080/v1"
 model = "my-model"
 ```
 
+## Theme Configuration
+
+Each profile can override the PS1 prompt template and emoji via an optional `theme` section.
+If no `theme` is set, the mode default is used.
+
+### ThemeOverride
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt` | string? | *(mode default)* | PS1 prompt template |
+| `emoji` | string? | *(mode default)* | Mode emoji |
+
+### Prompt Template Variables
+
+| Variable | Description |
+|----------|-------------|
+| `{user}` | Current `$USER` |
+| `{host}` | Hostname (short) |
+| `{cwd}` | Current working directory |
+| `{mode}` | Mode name (kids/agent/admin) |
+| `{git_branch}` | Git branch name (when available) |
+| `{emoji}` | Mode emoji |
+
+### Mode Default Prompts
+
+| Mode | Prompt | Emoji |
+|------|--------|-------|
+| Kids | `🐚 {emoji} {cwd}> ` | 🧒 |
+| Agent | `[{mode}] {user}:{cwd}$ ` | 🤖 |
+| Admin | `{user}@{host}:{cwd}$ ` | ⚡ |
+
+### Example: Custom prompt for agent profile
+
+```toml
+[profile.agent]
+mode = "agent"
+
+[profile.agent.theme]
+prompt = "{emoji} [{mode}] {user} in {cwd}$ "
+emoji = "🛸"
+```
+
+### Example: Minimal kids prompt
+
+```toml
+[profile.kids]
+mode = "kids"
+
+[profile.kids.theme]
+prompt = "🐚 > "
+```
+
 ## AclConfig
 
 Additional ACL rules layered on top of the mode defaults.
@@ -159,18 +211,18 @@ extra_block = ["format", "fdisk", "mkfs"]
 - **Output**: Emoji prefixes (`📁`, `✅`, `❌`), colorized
 - **LLM**: Tutor tone — encouraging, age-appropriate explanations
 - **Sandbox**: Linux namespace isolation with restricted filesystem
-- **Prompt**: `[😊 kids]$`
+- **Prompt**: `[😊 kids]$` *(configurable via theme.prompt)*
 
 ### Agent Mode
 - **ACL**: Blocklist — blocks dangerous commands (sudo, rm -rf /, etc.)
 - **Output**: JSON envelope `{"type":"output","command":"...","stdout":"...","exitCode":0}`
 - **LLM**: Structured — generates commands, explains errors in JSON
 - **Sandbox**: None
-- **Prompt**: `[🤖 agent]$`
+- **Prompt**: `[🤖 agent]$` *(configurable via theme.prompt)*
 
 ### Admin Mode
 - **ACL**: No restrictions
 - **Output**: Plain passthrough (unchanged)
 - **LLM**: Technical assistant
 - **Sandbox**: None
-- **Prompt**: `[⚡ admin]$`
+- **Prompt**: `[⚡ admin]$` *(configurable via theme.prompt)*

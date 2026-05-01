@@ -3606,6 +3606,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "shlex",
  "shrs",
  "shrs_job",
  "shrs_lang",

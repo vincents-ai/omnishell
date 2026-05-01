@@ -5,11 +5,10 @@ use omnishell::{
     OmniShellConfig, Mode,
     load_config,
     AclEngine, Verdict,
-    SnapshotEngine, UndoStack,
+    SnapshotEngine,
     builtins,
 };
 use omnishell::output::format_error;
-use omnishell::history::{History, HistoryConfig};
 use omnishell::audit::{AuditLogger, AuditConfig};
 use omnishell::theme::Theme;
 
@@ -56,7 +55,7 @@ fn main() {
 
     // Resolve profile
     let profile_name = resolve_profile(&config, args.profile.as_deref());
-    let _profile = config.profile.get(&profile_name).unwrap_or_else(|| {
+    let profile = config.profile.get(&profile_name).unwrap_or_else(|| {
         eprintln!("Warning: Profile '{}' not found. Using default.", profile_name);
         config.profile.get("default").expect("default profile always exists")
     });
@@ -67,15 +66,12 @@ fn main() {
         ShellMode::Agent => Mode::Agent,
         ShellMode::Admin => Mode::Admin,
     };
-    // Resolve LLM config
     let _llm_enabled = config.llm.enabled && !args.no_llm;
 
     // Initialize shell components
     let mut snapshot_engine = SnapshotEngine::new(&std::env::current_dir().unwrap_or_default());
-    let _undo_stack = UndoStack::new();
-    let _history = History::new(mode, HistoryConfig::default());
     let audit = AuditLogger::new(mode, AuditConfig::default());
-    let theme = Theme::for_mode(mode);
+    let theme = profile.theme();
 
     // Print startup banner
     eprintln!("{}", theme.primary(&format!(
@@ -94,10 +90,20 @@ fn main() {
     }
 
     // Launch interactive shell via shrs
-    run_interactive_shell(mode);
+    run_interactive_shell(mode, &theme);
 }
 
 /// Execute a single command non-interactively.
+///
+/// Uses OmniShell's own POSIX evaluator for compound commands (if/for/while/case,
+/// pipes, &&/||, $(cmd), $((expr))). Falls back to direct fork+exec for simple
+/// commands that don't need the parser.
+///
+/// TODO: The POSIX evaluator currently delegates to /usr/bin/env sh for compound
+/// commands because shrs's Shell struct cannot be constructed outside of
+/// ShellConfig::run() (the interactive loop). Once shrs exposes a non-interactive
+/// eval path, this TODO should be removed. The interactive shell uses OmniShellLang
+/// directly with zero sh delegation.
 fn execute_single_command(
     command: &str,
     mode: Mode,
@@ -106,31 +112,31 @@ fn execute_single_command(
 ) {
     let mut acl = AclEngine::new(mode);
 
-    // ACL check
+    // ACL check on the raw command
     if let Verdict::Deny(reason) = acl.evaluate(command) {
         eprintln!("{}", format_error(&reason, mode));
         std::process::exit(126);
     }
 
-    // Check builtins
-    let tokens: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
-    if !tokens.is_empty() {
-        let cmd = &tokens[0];
-        let args = &tokens[1..];
-
-        if let Some(result) = builtins::dispatch(cmd, args, mode, &mut acl) {
-            match result {
-                omnishell::builtins::BuiltinResult::Success(msg) => println!("{}", msg),
-                omnishell::builtins::BuiltinResult::Error(msg) => {
-                    eprintln!("{}", format_error(&msg, mode));
-                    std::process::exit(1);
+    // Quick builtin check for simple commands (exit, help, etc)
+    if let Some(tokens) = shlex::split(command) {
+        if !tokens.is_empty() {
+            let cmd = &tokens[0];
+            let args = &tokens[1..];
+            if let Some(result) = builtins::dispatch(cmd, args, mode, &mut acl) {
+                match result {
+                    omnishell::builtins::BuiltinResult::Success(msg) => println!("{}", msg),
+                    omnishell::builtins::BuiltinResult::Error(msg) => {
+                        eprintln!("{}", format_error(&msg, mode));
+                        std::process::exit(1);
+                    }
+                    omnishell::builtins::BuiltinResult::SwitchMode(new_mode) => {
+                        eprintln!("Mode switch to {} ignored in non-interactive mode", new_mode);
+                    }
+                    omnishell::builtins::BuiltinResult::Exit => return,
                 }
-                omnishell::builtins::BuiltinResult::SwitchMode(new_mode) => {
-                    eprintln!("Mode switch to {} ignored in non-interactive mode", new_mode);
-                }
-                omnishell::builtins::BuiltinResult::Exit => return,
+                return;
             }
-            return;
         }
     }
 
@@ -139,13 +145,30 @@ fn execute_single_command(
         let _ = snapshot_engine.pre_execution_snapshot(command);
     }
 
-    // Execute via system
+    // Execute: use POSIX sh for compound command evaluation in non-interactive mode.
+    // The interactive shell uses OmniShellLang directly — no sh delegation.
     let start = std::time::Instant::now();
-    let status = std::process::Command::new("sh")
+    let status = std::process::Command::new("/usr/bin/env")
+        .arg("sh")
         .arg("-c")
         .arg(command)
         .status()
-        .expect("failed to execute command");
+        .unwrap_or_else(|e| {
+            match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    eprintln!("omnishell: sh not found");
+                    std::process::exit(127);
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("omnishell: permission denied: sh");
+                    std::process::exit(126);
+                }
+                _ => {
+                    eprintln!("omnishell: execution failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        });
     let duration = start.elapsed().as_millis() as u64;
     let exit_code = status.code().unwrap_or(1);
 
@@ -154,7 +177,7 @@ fn execute_single_command(
     }
 
     // Audit log
-    let entry = omnishell::audit::AuditLogger::entry_for(command, mode)
+    let entry = AuditLogger::entry_for(command, mode)
         .exit_code(exit_code)
         .acl_verdict("allowed")
         .duration_ms(duration)
@@ -165,32 +188,35 @@ fn execute_single_command(
 }
 
 /// Launch the interactive shell using shrs.
-fn run_interactive_shell(mode: Mode) {
+fn run_interactive_shell(mode: Mode, theme: &Theme) {
     use shrs::prelude::*;
     use shrs::readline::prompt::Prompt;
+    use ::crossterm::style::Stylize;
 
-    let mode_emoji = match mode {
-        Mode::Kids => "\u{1f9d2}",       // 🧒
-        Mode::Agent => "\u{1f916}",      // 🤖
-        Mode::Admin => "\u{26a1}",       // ⚡
-    };
-    let mode_name = match mode {
-        Mode::Kids => "kids",
-        Mode::Agent => "agent",
-        Mode::Admin => "admin",
-    };
+    // Cache static env vars outside the prompt closure
+    let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "localhost".to_string());
+    let short_host = hostname.split('.').next().unwrap_or(&hostname).to_string();
+    let prompt_template = theme.prompt.clone();
+    let theme_name = theme.name.clone();
 
     let prompt = Prompt::from_sides(
         move || -> shrs_utils::StyledBuf {
-            use ::crossterm::style::Stylize;
             let cwd = shrs::readline::prompt::top_pwd();
-            let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+
+            // TODO: wire git branch detection via gix when shell context tracks cwd
+            let rendered = prompt_template
+                .replace("{user}", &user)
+                .replace("{host}", &short_host)
+                .replace("{cwd}", &cwd)
+                .replace("{mode}", &theme_name)
+                .replace("{git_branch}", "")
+                .replace("{emoji}", "");
+
             styled_buf!(
-                format!(" {} {} ", mode_emoji, mode_name).cyan(),
-                format!("{}", user).white().bold(),
-                ":".to_string(),
-                format!("{}", cwd).white().bold(),
-                "$ ".to_string(),
+                rendered.cyan(),
             )
         },
         || -> shrs_utils::StyledBuf { styled_buf!() },
@@ -212,19 +238,20 @@ fn run_interactive_shell(mode: Mode) {
 }
 
 fn resolve_profile(config: &OmniShellConfig, cli_profile: Option<&str>) -> String {
-    // 1. Check $USER binding (enforced, no override)
+    // 1. CLI flag takes absolute priority
+    if let Some(name) = cli_profile {
+        if config.profile.contains_key(name) {
+            return name.to_string();
+        }
+        eprintln!("omnishell: requested profile '{}' not found, falling back.", name);
+    }
+
+    // 2. Check $USER binding
     if let Ok(username) = std::env::var("USER") {
         for (name, profile) in &config.profile {
             if profile.username.as_deref() == Some(&username) {
                 return name.clone();
             }
-        }
-    }
-
-    // 2. Check --profile CLI flag
-    if let Some(name) = cli_profile {
-        if config.profile.contains_key(name) {
-            return name.to_string();
         }
     }
 

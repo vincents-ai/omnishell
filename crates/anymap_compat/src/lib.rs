@@ -1,14 +1,39 @@
 //! Drop-in replacement for the `anymap` crate compatible with Rust 1.88+
 //!
-//! Uses `HashMap<TypeId, Box<dyn Any>>` under the hood.
+//! Uses `HashMap<TypeId, Box<dyn Any + Send + Sync>>` with a passthrough hasher
+//! (TypeId is already hashed by the compiler, no need to re-hash).
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
+use std::marker::PhantomData;
+
+/// A no-op hasher for `TypeId` since it is already heavily hashed by the compiler.
+#[derive(Default)]
+pub struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("TypeId calls write_u64 directly");
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type TypeMap = HashMap<TypeId, Box<dyn Any>, BuildHasherDefault<IdHasher>>;
 
 /// A map keyed by type.
 #[derive(Default)]
 pub struct Map {
-    inner: HashMap<TypeId, Box<dyn Any>>,
+    inner: TypeMap,
 }
 
 impl Map {
@@ -16,7 +41,7 @@ impl Map {
         Self::default()
     }
 
-    pub fn insert<T: 'static>(&mut self, val: T) -> Option<T> {
+    pub fn insert<T: Any>(&mut self, val: T) -> Option<T> {
         let id = TypeId::of::<T>();
         self.inner
             .insert(id, Box::new(val))
@@ -62,18 +87,11 @@ impl Map {
         self.inner.clear();
     }
 
-    pub fn entry<T: 'static>(&mut self) -> Entry<'_, T> {
+    pub fn entry<T: Any>(&mut self) -> Entry<'_, T> {
         let id = TypeId::of::<T>();
-        if self.inner.contains_key(&id) {
-            Entry::Occupied(OccupiedEntry {
-                inner: self.inner.get_mut(&id).unwrap(),
-                _marker: std::marker::PhantomData,
-            })
-        } else {
-            Entry::Vacant(VacantEntry {
-                map: &mut self.inner,
-                _marker: std::marker::PhantomData,
-            })
+        match self.inner.entry(id) {
+            hash_map::Entry::Occupied(e) => Entry::Occupied(OccupiedEntry { inner: e, _marker: PhantomData }),
+            hash_map::Entry::Vacant(e) => Entry::Vacant(VacantEntry { inner: e, _marker: PhantomData }),
         }
     }
 }
@@ -84,30 +102,30 @@ pub enum Entry<'a, T: 'static> {
 }
 
 pub struct OccupiedEntry<'a, T: 'static> {
-    inner: &'a mut Box<dyn Any>,
-    _marker: std::marker::PhantomData<T>,
+    inner: hash_map::OccupiedEntry<'a, TypeId, Box<dyn Any>>,
+    _marker: PhantomData<T>,
 }
 
 pub struct VacantEntry<'a, T: 'static> {
-    map: &'a mut HashMap<TypeId, Box<dyn Any>>,
-    _marker: std::marker::PhantomData<T>,
+    inner: hash_map::VacantEntry<'a, TypeId, Box<dyn Any>>,
+    _marker: PhantomData<T>,
 }
 
-impl<'a, T: 'static> Entry<'a, T> {
+impl<'a, T: Any> Entry<'a, T> {
     pub fn or_insert(self, default: T) -> &'a mut T {
         match self {
-            Entry::Occupied(e) => e.inner.downcast_mut::<T>().unwrap(),
-            Entry::Vacant(e) => {
-                let id = TypeId::of::<T>();
-                e.map.insert(id, Box::new(default));
-                e.map.get_mut(&id).unwrap().downcast_mut::<T>().unwrap()
-            }
+            Entry::Occupied(e) => e.inner.into_mut().downcast_mut::<T>().unwrap(),
+            Entry::Vacant(e) => e
+                .inner
+                .insert(Box::new(default))
+                .downcast_mut::<T>()
+                .unwrap(),
         }
     }
 }
 
-// Compatibility shim: provide the same trait that anymap's CloneAny provides
-// so that shrs_hooks can use the same API
+// Compatibility shim: provide the same trait that shrs_hooks expects
+// so that shrs can use the same API with CloneAny bounds
 pub trait CloneAny: Any + Send + Sync {
     fn clone_box(&self) -> Box<dyn CloneAny>;
 }
@@ -117,6 +135,3 @@ impl<T: Any + Send + Sync + Clone + 'static> CloneAny for T {
         Box::new(self.clone())
     }
 }
-
-// The original anymap used `anymap::Map` with `CloneAny` in some places.
-// This module re-exports the same types shrs expects.

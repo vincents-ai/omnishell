@@ -42,17 +42,20 @@
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "omnishell";
           version = "0.1.0";
-          
+
           src = ./.;
-          
-          cargoHash = pkgs.lib.fakeHash;
+
+          cargoHash = "sha256-+pdyhD+f3/pIhij4iJtTd+vGbfLN7EnihDPYYTxnT7g=";
 
           nativeBuildInputs = with pkgs; [ pkg-config cmake ];
           buildInputs = with pkgs; [ openssl fontconfig zlib ];
-          
+
           env = {
             ZLIB_NO_PKG_CONFIG = "1";
           };
+
+          # Integration tests need the built binary — skip them in checkPhase
+          checkFlags = ["--skip" "test_scripting"];
         };
       }
     );
