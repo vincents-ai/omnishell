@@ -1,59 +1,109 @@
-# **Product Requirements Document (PRD): OmniShell**
+# OmniShell Product Requirements Document
 
-## **1\. Executive Summary**
+## 1. Executive Summary
 
-**OmniShell** is a natively compiled, POSIX-compliant interactive terminal environment built in Rust using the shrs framework. It integrates vincents-ai/llm for intelligent command generation/tutoring and vincents-ai/gitoxide for state-safety. The project serves two distinct user personas through dynamic execution profiles: an educational "Kids Sandbox" and a strict "Agentic Framework" environment.
+**OmniShell** is a natively compiled, POSIX-compliant interactive shell built in Rust using the shrs framework. It integrates `vincents-ai/llm` for intelligent command generation/tutoring and `vincents-ai/gitoxide` for state-safety. The shell supports three execution profiles — Kids, Agent, and Admin — each with distinct ACL rules, output formatting, LLM behaviour, and visual themes.
 
-## **2\. Target Personas & Use Cases**
+## 2. Target Personas
 
-### **2.1 Persona A: The Learner (Ages 5-9)**
+### 2.1 Kids (Ages 5–9)
 
-* **Goal:** Learn terminal navigation and basic computer interaction without the risk of destroying the host OS.  
-* **Interaction Model:** Visual, gamified, and forgiving. AI acts as a tutor rather than an executor.  
-* **Key Constraints:** \* Cannot navigate outside of designated sandbox directories (chroot/jail equivalent).  
-  * Strict allowlist of benign commands (ls, cd, echo, cowsay).
+- **Goal:** Learn terminal navigation without risking the host OS
+- **Interaction:** Visual, emoji-heavy, AI tutor mode
+- **ACL:** Strict allowlist (`ls`, `cd`, `pwd`, `echo`, `cat`, `cowsay`, `fortune`, `date`, `whoami`, `help`, `exit`)
+- **Sandbox:** Linux namespace isolation with restricted filesystem
+- **Prompt:** `🐚 🧒 {cwd}> ` (configurable via theme)
 
-### **2.2 Persona B: The AI Coding Agent**
+### 2.2 AI Coding Agent
 
-* **Goal:** Execute multi-step coding, building, and deployment tasks within a structured, parseable environment.  
-* **Interaction Model:** Headless or embedded. High volume of commands. Outputs must be structured (JSON).  
-* **Key Constraints:**  
-  * Must be able to modify the filesystem, but destructive actions must be reversible.  
-  * Blocklist of recursive deletion or system-level network exfiltration.
+- **Goal:** Execute multi-step coding/build/deploy tasks in a structured environment
+- **Interaction:** Headless or embedded. JSON output envelope
+- **ACL:** Blocklist (`sudo`, `su`, `passwd`, `rm -rf /`, `mkfs`, `dd if=/dev/zero`)
+- **Output:** `{"type":"success","command":"...","stdout":"...","exitCode":0}`
+- **Prompt:** `[🤖 agent] {user}:{cwd}$ ` (configurable via theme)
 
-## **3\. Functional Requirements**
+### 2.3 Admin
 
-### **3.1 Profile Initialization Layer**
+- **Goal:** Unrestricted shell access with LLM assistant
+- **ACL:** No restrictions
+- **Prompt:** `{user}@{host}:{cwd}$ ` (configurable via theme)
 
-* **REQ-3.1.1:** The binary must accept command-line arguments (e.g., \--mode kids, \--mode agent) to establish the runtime profile before shell initialization.  
-* **REQ-3.1.2:** The Agent mode must enforce JSON serialization for all standard output, standard error, and exit codes.
+## 3. Functional Requirements
 
-### **3.2 Access Control List (ACL) Middleware**
+### 3.1 Profile & Configuration
 
-* **REQ-3.2.1:** Every command (user-typed or AI-generated) must pass through a unified ACL parser.  
-* **REQ-3.2.2:** The ACL must support both an Allowlist (explicit inclusion) and a Blocklist (explicit exclusion, overrides allowlist).  
-* **REQ-3.2.3:** Blocked commands must not spawn an OS process. They must immediately return an access violation error.
+| Req | Description |
+|-----|-------------|
+| REQ-3.1.1 | CLI flags: `--mode kids|agent|admin`, `--profile <name>`, `--config <path>`, `--command <cmd>`, `--no-llm` |
+| REQ-3.1.2 | TOML or JSON config at `/etc/omnishell/config.toml`, `$XDG_CONFIG_HOME/omnishell/config.toml`, or `--config` |
+| REQ-3.1.3 | Per-profile overrides for LLM, ACL, and theme |
+| REQ-3.1.4 | `--profile` CLI flag takes absolute precedence over `$USER` binding |
+| REQ-3.1.5 | Theme configuration: configurable PS1 prompt via template variables `{user}`, `{host}`, `{cwd}`, `{mode}`, `{git_branch}`, `{emoji}` |
 
-### **3.3 LLM Integration (vincents-ai/llm)**
+### 3.2 POSIX Shell Language
 
-* **REQ-3.3.1:** The shell will expose a custom built-in command ? (or ai) to interface with the LLM.  
-* **REQ-3.3.2:** In Kids Mode, the LLM prompt will be heavily seeded with a system prompt instructing it to act as an encouraging tutor, returning instructional text rather than executing.  
-* **REQ-3.3.3:** In Agent Mode, the LLM is expected to generate POSIX execution strings formatted via a predefined JSON schema.
+| Req | Description |
+|-----|-------------|
+| REQ-3.2.1 | Full POSIX shell grammar: simple commands, pipes, `if/elif/else/fi`, `while/until/do/done`, `for/in/do/done`, `case/esac`, `&&`, `\|\|`, `!`, `;`, `&` |
+| REQ-3.2.2 | Variable assignment: `x=value; echo $x`, `$VAR`, `${VAR}` |
+| REQ-3.2.3 | Command substitution: `$(cmd)` via direct fork+exec (no `sh -c`) |
+| REQ-3.2.4 | Arithmetic expansion: `$((expr))` with `+`, `-`, `*`, `/`, `%`, parentheses |
+| REQ-3.2.5 | Glob expansion in args and `for`/`case` patterns |
+| REQ-3.2.6 | Function definitions: `name() { body; }` |
+| REQ-3.2.7 | Built-in `test` / `[`: string, file, numeric, logical operators |
+| REQ-3.2.8 | File redirections: `<`, `>`, `>>`, `<&N`, `>&N`, `<>` |
+| REQ-3.2.9 | Background jobs: `cmd &` |
+| REQ-3.2.10 | Subshells: `(cmd)` |
 
-### **3.4 State Safety via Gitoxide (vincents-ai/gitoxide)**
+### 3.3 Access Control
 
-* **REQ-3.4.1:** The shell must hook into shrs BeforeCommandCtx and AfterCommandCtx.  
-* **REQ-3.4.2:** Prior to the execution of any command flagged as "mutating" (e.g., rm, mv, cargo), the shell must query gix to check if CWD is within a valid git repository.  
-* **REQ-3.4.3:** If in a repository, the shell must create an atomic "Pre-Execution Snapshot" commit.  
-* **REQ-3.4.4:** Upon completion of the command, a "Post-Execution Snapshot" commit must be created, capturing the exit code in the commit message.
+| Req | Description |
+|-----|-------------|
+| REQ-3.3.1 | Every command passes through ACL before execution |
+| REQ-3.3.2 | Allowlist (kids) + blocklist (agent) + unrestricted (admin) |
+| REQ-3.3.3 | Blocked commands return exit 126 with formatted error |
+| REQ-3.3.4 | Runtime ACL modification via `allow`/`block` builtins |
+| REQ-3.3.5 | Profile-aware tab completion: kids see allowlist only, agent/admin see full PATH |
 
-## **4\. Non-Functional Requirements**
+### 3.4 LLM Integration
 
-* **Performance:** The shell input loop must maintain \<10ms latency. gix synchronous hooks must not block the main thread for more than 100ms.  
-* **Portability:** Must compile on x86\_64 and aarch64 Linux/macOS targets via Nix.
+| Req | Description |
+|-----|-------------|
+| REQ-3.4.1 | Built-in `?` / `ai` command for LLM queries |
+| REQ-3.4.2 | Kids: tutor prompt (encouraging, age-appropriate) |
+| REQ-3.4.3 | Agent: structured JSON prompt |
+| REQ-3.4.4 | Admin: technical assistant prompt |
+| REQ-3.4.5 | Providers: OpenAI, Anthropic, Ollama, custom (OpenAI-compatible) |
 
-## **5\. Development Roadmap**
+### 3.5 State Safety
 
-* **Phase 1 (Foundation):** CLI parser, shrs basic configuration, and hardcoded ACL lists.  
-* **Phase 2 (Safety):** Integration of gix hooks and snapshotting logic.  
-* **Phase 3 (Intelligence):** Wiring of vincents-ai/llm with dynamic system prompting based on the active profile.
+| Req | Description |
+|-----|-------------|
+| REQ-3.5.1 | Pre/post-execution git snapshots for mutating commands |
+| REQ-3.5.2 | Undo/redo stack with `undo`/`redo` builtins |
+| REQ-3.5.3 | Audit logging per mode |
+
+### 3.6 Tab Completion
+
+| Req | Description |
+|-----|-------------|
+| REQ-3.6.1 | Mode-aware command completion (allowlist vs full PATH) |
+| REQ-3.6.2 | Built-in command completion |
+| REQ-3.6.3 | File path argument completion |
+
+## 4. Non-Functional Requirements
+
+| Category | Requirement |
+|----------|-------------|
+| Performance | Prompt render <10ms; static env vars cached outside closure |
+| Portability | x86_64 and aarch64 Linux/macOS via Nix |
+| Reproducibility | `nix profile add github:vincents-ai/omnishell` works out of the box |
+| Testing | Unit + integration + BDD tests pass in nix sandbox |
+| Security | No `sh -c` in interactive evaluator; direct fork+exec only |
+| Licensing | AGPL-3.0-or-later OR LicenseRef-Commercial |
+
+## 5. Build & Distribution
+
+- **Nix flake** with `rustPlatform.buildRustPackage` (real `cargoHash`, not `fakeHash`)
+- **Dev shell** via `nix develop` with Rust 1.88.0 stable
+- **Single binary** output — no external dependencies
