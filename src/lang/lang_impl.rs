@@ -314,6 +314,115 @@ fn eval_command(
 }
 
 /// Evaluate a simple command.
+/// Process a list of redirects into stdin/stdout/stderr overrides.
+///
+/// Supports:
+/// - `< file` (Read) → stdin from file
+/// - `> file` (Write) → stdout to file (create/truncate)
+/// - `>> file` (WriteAppend) → stdout to file (append)
+/// - `<&N` (ReadDup) → stdin from fd N (0=&0, 1=&0 maps stdin)
+/// - `>&N` (WriteDup) → redirect fd N to current stdout (e.g., 2>&1)
+/// - `<> file` (ReadWrite) → stdout to file (read+write)
+fn process_redirects(
+    redirects: &[ast::Redirect],
+    rt: &shrs::prelude::Runtime,
+) -> anyhow::Result<(JobStdin, Output, Output)> {
+    use std::fs::File;
+    use std::os::unix::io::FromRawFd;
+
+    let mut stdin = JobStdin::Inherit;
+    let mut stdout = Output::Inherit;
+    let mut stderr = Output::Inherit;
+
+    for redirect in redirects {
+        let fd_n = redirect.n.unwrap_or(if matches!(redirect.mode, ast::RedirectMode::Read | ast::RedirectMode::ReadAppend | ast::RedirectMode::ReadDup) { 0 } else { 1 });
+        let filename = envsubst(rt, &redirect.file);
+
+        match redirect.mode {
+            ast::RedirectMode::Read => {
+                let file = File::open(&filename)
+                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                if fd_n == 0 {
+                    stdin = JobStdin::File(file);
+                }
+            }
+            ast::RedirectMode::Write => {
+                let file = File::create(&filename)
+                    .map_err(|e| anyhow::anyhow!("cannot create '{}': {}", filename, e))?;
+                if fd_n == 1 {
+                    stdout = Output::File(file);
+                } else if fd_n == 2 {
+                    stderr = Output::File(file);
+                }
+            }
+            ast::RedirectMode::WriteAppend => {
+                let file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                if fd_n == 1 {
+                    stdout = Output::File(file);
+                } else if fd_n == 2 {
+                    stderr = Output::File(file);
+                }
+            }
+            ast::RedirectMode::ReadAppend => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .open(&filename)
+                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                if fd_n == 0 {
+                    stdin = JobStdin::File(file);
+                }
+            }
+            ast::RedirectMode::ReadDup => {
+                // <&N — duplicate fd N to stdin
+                if let Ok(src_fd) = filename.parse::<i32>() {
+                    let new_fd = unsafe { libc::dup(src_fd) };
+                    if new_fd >= 0 {
+                        let file = unsafe { File::from_raw_fd(new_fd) };
+                        stdin = JobStdin::File(file);
+                    }
+                }
+            }
+            ast::RedirectMode::WriteDup => {
+                // N>&M — duplicate fd M to fd N
+                // Common: 2>&1 means redirect stderr to wherever stdout goes
+                if let Ok(target_fd) = filename.parse::<i32>() {
+                    if fd_n == 2 && target_fd == 1 {
+                        // 2>&1 — stderr to stdout
+                        stderr = Output::FileDescriptor(1);
+                    } else if fd_n == 1 && target_fd == 2 {
+                        // 1>&2 or >&2 — stdout to stderr
+                        stdout = Output::FileDescriptor(2);
+                    } else if fd_n == 1 {
+                        stdout = Output::FileDescriptor(target_fd);
+                    } else if fd_n == 2 {
+                        stderr = Output::FileDescriptor(target_fd);
+                    }
+                }
+            }
+            ast::RedirectMode::ReadWrite => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| anyhow::anyhow!("cannot open '{}': {}", filename, e))?;
+                if fd_n == 0 {
+                    stdin = JobStdin::File(file);
+                } else if fd_n == 1 {
+                    stdout = Output::File(file);
+                }
+            }
+        }
+    }
+
+    Ok((stdin, stdout, stderr))
+}
+
 fn eval_simple(
     sh: &Shell,
     states: &States,
@@ -406,13 +515,16 @@ fn eval_simple(
         let _ = rt.env.set(&assign.var, &val);
     }
 
+    // Process redirects to determine stdin/stdout/stderr
+    let (stdin, stdout, stderr) = process_redirects(_redirects, rt)?;
+
     // Run as external command
     let (proc, pgid) = run_external_command(
         cmd_name,
         &cmd_args,
-        JobStdin::Inherit,
-        Output::Inherit,
-        Output::Inherit,
+        stdin,
+        stdout,
+        stderr,
         None,
     ).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
