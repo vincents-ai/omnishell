@@ -82,6 +82,11 @@ members = [".", "crates/anymap_compat"]
 [patch.crates-io]
 gix = { git = "https://github.com/vincents-ai/gitoxide" }
 anymap = { path = "crates/anymap_compat" }
+shrs_core = { git = "https://github.com/vincents-ai/shrs", subdir = "crates/shrs_core" }
+shrs = { git = "https://github.com/vincents-ai/shrs", subdir = "crates/shrs" }
+shrs_job = { git = "https://github.com/vincents-ai/shrs", subdir = "crates/shrs_job" }
+shrs_lang = { git = "https://github.com/vincents-ai/shrs", subdir = "crates/shrs_lang" }
+shrs_utils = { git = "https://github.com/vincents-ai/shrs", subdir = "crates/shrs_utils" }
 
 [dev-dependencies]
 tempfile = "3"

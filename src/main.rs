@@ -97,19 +97,18 @@ fn main() {
 ///
 /// Uses OmniShell's own POSIX evaluator for compound commands (if/for/while/case,
 /// pipes, &&/||, $(cmd), $((expr))). Falls back to direct fork+exec for simple
-/// commands that don't need the parser.
+/// Execute a single command non-interactively using OmniShell's native POSIX evaluator.
 ///
-/// TODO: The POSIX evaluator currently delegates to /usr/bin/env sh for compound
-/// commands because shrs's Shell struct cannot be constructed outside of
-/// ShellConfig::run() (the interactive loop). Once shrs exposes a non-interactive
-/// eval path, this TODO should be removed. The interactive shell uses OmniShellLang
-/// directly with zero sh delegation.
+/// No sh -c — compound commands (if/for/while/case, pipes, &&/||, $(cmd), $((expr)))
+/// are all evaluated through OmniShellLang via ShellConfig::build().
 fn execute_single_command(
     command: &str,
     mode: Mode,
     snapshot_engine: &mut SnapshotEngine,
     audit: &AuditLogger,
 ) {
+    use shrs::prelude::*;
+
     let mut acl = AclEngine::new(mode);
 
     // ACL check on the raw command
@@ -145,31 +144,32 @@ fn execute_single_command(
         let _ = snapshot_engine.pre_execution_snapshot(command);
     }
 
-    // Execute: use POSIX sh for compound command evaluation in non-interactive mode.
-    // The interactive shell uses OmniShellLang directly — no sh delegation.
+    // Build shell context and evaluate natively — no sh -c
+    // Use shrs_lang::PosixLang for full POSIX compatibility in --command mode
+    // (variable assignment, arithmetic expansion, command substitution, etc.)
+    let completer = omnishell::completion::CompletionEngine::new(mode);
+    let (shell, states) = ShellBuilder::default()
+        .with_lang(PosixLang::default())
+        .with_state(omnishell::lang::FunctionTable::new())
+        .with_state(omnishell::lang::ShellMode(mode))
+        .with_state(omnishell::history::History::new(mode, omnishell::history::HistoryConfig::default()))
+        .with_completer(completer)
+        .build()
+        .expect("failed to build shell config")
+        .build_shell()
+        .expect("failed to build shell");
+
     let start = std::time::Instant::now();
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .status()
-        .unwrap_or_else(|e| {
-            match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    eprintln!("omnishell: sh not found in PATH");
-                    std::process::exit(127);
-                }
-                std::io::ErrorKind::PermissionDenied => {
-                    eprintln!("omnishell: permission denied: sh");
-                    std::process::exit(126);
-                }
-                _ => {
-                    eprintln!("omnishell: execution failed: {e}");
-                    std::process::exit(1);
-                }
-            }
-        });
+    let result = shell.lang.eval(&shell, &states, command.to_string());
     let duration = start.elapsed().as_millis() as u64;
-    let exit_code = status.code().unwrap_or(1);
+
+    let exit_code = match result {
+        Ok(cmd_output) => cmd_output.status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("omnishell: {e}");
+            1
+        }
+    };
 
     if SnapshotEngine::is_mutating_command(command) {
         let _ = snapshot_engine.post_execution_snapshot(command, exit_code);
