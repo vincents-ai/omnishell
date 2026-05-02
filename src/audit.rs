@@ -148,8 +148,37 @@ impl AuditLogger {
 
         writeln!(file, "{json}")?;
 
-        // TODO: file rotation based on max_file_size
+        // File rotation: if current log exceeds max_file_size, rotate it
+        let metadata = file.metadata()?;
+        if metadata.len() > self.config.max_file_size {
+            drop(file); // close the file handle before renaming
+            self.rotate_log()?;
+        }
 
+        Ok(())
+    }
+
+    /// Rotate the current log file: rename to .1, .2, etc. (keep last 5).
+    fn rotate_log(&self) -> std::io::Result<()> {
+        let max_rotated = 5;
+        // Delete the oldest rotated file if it exists
+        let oldest = format!("{}.{}", self.log_path.display(), max_rotated);
+        if std::path::Path::new(&oldest).exists() {
+            let _ = std::fs::remove_file(&oldest);
+        }
+        // Shift rotated files: .4 -> .5, .3 -> .4, ... .1 -> .2
+        for i in (1..max_rotated).rev() {
+            let src = format!("{}.{}", self.log_path.display(), i);
+            let dst = format!("{}.{}", self.log_path.display(), i + 1);
+            if std::path::Path::new(&src).exists() {
+                let _ = std::fs::rename(&src, &dst);
+            }
+        }
+        // Move current log to .1
+        let rotated = format!("{}.1", self.log_path.display());
+        let _ = std::fs::rename(&self.log_path, &rotated);
+
+        tracing::info!("Rotated audit log to {}", rotated);
         Ok(())
     }
 

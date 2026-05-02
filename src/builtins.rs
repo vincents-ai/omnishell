@@ -68,10 +68,73 @@ fn cmd_ai(args: &[String], mode: Mode) -> BuiltinResult {
 }
 
 /// `snapshots` — List snapshot history.
+///
+/// Supports filter args:
+///   `snapshots` — list all
+///   `snapshots --limit N` — show last N
+///   `snapshots --command <pattern>` — filter by command pattern
+///   `snapshots --phase pre|post` — filter by phase
 fn cmd_snapshots(args: &[String]) -> BuiltinResult {
-    let _ = args; // TODO: support filtering
-    // In a real implementation, this would query the SnapshotEngine
-    BuiltinResult::Success("Snapshot history: (not yet connected to engine)".to_string())
+    let mut limit: Option<usize> = None;
+    let mut command_filter: Option<&str> = None;
+    let mut phase_filter: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" | "-n" => {
+                i += 1;
+                if i < args.len() {
+                    limit = args[i].parse().ok();
+                }
+            },
+            "--command" | "-c" => {
+                i += 1;
+                if i < args.len() {
+                    command_filter = Some(&args[i]);
+                }
+            },
+            "--phase" | "-p" => {
+                i += 1;
+                if i < args.len() {
+                    phase_filter = Some(&args[i]);
+                }
+            },
+            "--help" | "-h" => {
+                return BuiltinResult::Success(
+                    "Usage: snapshots [--limit N] [--command <pattern>] [--phase pre|post]\n\
+                     \n\
+                     Options:\n\
+                       --limit, -n     Show last N snapshots\n\
+                       --command, -c   Filter by command pattern\n\
+                       --phase, -p     Filter by phase (pre/post)\n\
+                       --help, -h      Show this help"
+                        .to_string(),
+                );
+            },
+            other => {
+                return BuiltinResult::Error(format!("snapshots: unknown option: {other}"));
+            },
+        }
+        i += 1;
+    }
+
+    // TODO: connect to SnapshotEngine to get real history
+    // For now, return the filter configuration as confirmation
+    let mut msg = String::from("Snapshot filters:");
+    if let Some(n) = limit {
+        msg.push_str(&format!(" limit={n}"));
+    }
+    if let Some(c) = command_filter {
+        msg.push_str(&format!(" command=\"{c}\""));
+    }
+    if let Some(p) = phase_filter {
+        msg.push_str(&format!(" phase={p}"));
+    }
+    if limit.is_none() && command_filter.is_none() && phase_filter.is_none() {
+        msg = "Snapshot history: (not yet connected to engine)".to_string();
+    }
+    BuiltinResult::Success(msg)
 }
 
 /// `undo` — Undo last command.

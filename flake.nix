@@ -45,7 +45,7 @@
 
           src = ./.;
 
-          cargoHash = "sha256-+pdyhD+f3/pIhij4iJtTd+vGbfLN7EnihDPYYTxnT7g=";
+          cargoHash = "sha256-/eUDxoH6YEfzl5lUWxxO5WWvHEFHlTCUf0BWuMIvm/E=";
 
           nativeBuildInputs = with pkgs; [ pkg-config cmake ];
           buildInputs = with pkgs; [ openssl fontconfig zlib ];

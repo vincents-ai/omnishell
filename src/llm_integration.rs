@@ -133,14 +133,48 @@ impl LlmClient {
         }
 
         let system = system_prompt(self.mode);
-        let full_prompt = format!("{system}\n\nUser: {prompt}");
 
-        // TODO: Wire to vincents-llm once the API is stable
-        // For now, return a graceful degradation response
-        LlmResponse::Error(format!(
-            "LLM integration pending (vincents-llm). Would have sent: {} bytes",
-            full_prompt.len()
-        ))
+        // Build the vincents-llm request
+        use vincents_llm::{ProviderManager, provider_manager::ProviderManagerConfig, ChatCompletionRequest, ChatMessage};
+
+        let pm_config = ProviderManagerConfig {
+            default_provider: self.config.model.clone(),
+            ..Default::default()
+        };
+        let manager = ProviderManager::new(pm_config);
+        let provider = match manager.get_default_provider() {
+            Some(p) => p,
+            None => {
+                // No provider configured — graceful degradation
+                return LlmResponse::Error(
+                    "No LLM provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or run Ollama locally.".to_string()
+                );
+            }
+        };
+
+        let request = ChatCompletionRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                ChatMessage::System { content: system, name: None },
+                ChatMessage::User { content: prompt.to_string(), name: None },
+            ],
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens),
+            ..Default::default()
+        };
+
+        match provider.chat_completion(request).await {
+            Ok(response) => {
+                let content = response.choices.first()
+                    .and_then(|c| match &c.message {
+                        ChatMessage::Assistant { content, .. } => content.clone(),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                LlmResponse::Success(content)
+            },
+            Err(e) => LlmResponse::Error(format!("LLM error: {e}")),
+        }
     }
 
     /// Send a query synchronously (blocks on the global runtime).
@@ -193,8 +227,11 @@ mod tests {
 
         // Should get a graceful error (not a panic)
         match response {
-            LlmResponse::Error(msg) => assert!(msg.contains("pending")),
-            _ => panic!("Expected Error response for unimplemented LLM"),
+            LlmResponse::Error(msg) => assert!(
+                msg.contains("No LLM provider") || msg.contains("LLM error"),
+                "Expected error about missing provider, got: {msg}"
+            ),
+            _ => panic!("Expected Error response for unconfigured LLM"),
         }
     }
 
