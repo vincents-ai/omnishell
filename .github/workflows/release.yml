@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Strip debug symbols for smaller binaries
+  RUSTFLAGS: "-C strip=symbols"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: omnishell-x86_64-linux
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: omnishell-aarch64-linux
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: omnishell-aarch64-macos
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: omnishell-x86_64-macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: omnishell-x86_64-windows.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          # Cross-compilation linker for Linux aarch64
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz omnishell
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path omnishell.exe -DestinationPath ../../../${{ matrix.artifact }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+          if-no-files-found: warn
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Get previous tag
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          # Build changelog from commits since last tag
+          if [ -n "$PREV" ]; then
+            CHANGES=$(git log "${PREV}..HEAD" --pretty=format:"- %s" --no-merges)
+          else
+            CHANGES=$(git log --pretty=format:"- %s" --no-merges -20)
+          fi
+
+          # Write to file for multiline output
+          echo "# OmniShell ${TAG}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## Changes" >> CHANGELOG.md
+          echo "$CHANGES" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## Downloads" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "| Platform | Architecture | File |" >> CHANGELOG.md
+          echo "|----------|-------------|------|" >> CHANGELOG.md
+          echo "| Linux | x86_64 | \`omnishell-x86_64-linux.tar.gz\` |" >> CHANGELOG.md
+          echo "| Linux | aarch64 | \`omnishell-aarch64-linux.tar.gz\` |" >> CHANGELOG.md
+          echo "| macOS | Apple Silicon | \`omnishell-aarch64-macos.tar.gz\` |" >> CHANGELOG.md
+          echo "| macOS | Intel | \`omnishell-x86_64-macos.tar.gz\` |" >> CHANGELOG.md
+          echo "| Windows | x86_64 | \`omnishell-x86_64-windows.exe.zip\` |" >> CHANGELOG.md
+
+          cat CHANGELOG.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          generate_release_notes: false
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
