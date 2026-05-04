@@ -28,9 +28,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: omnishell-aarch64-macos
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: omnishell-x86_64-macos
 
     steps:
       - uses: actions/checkout@v4
@@ -118,11 +115,14 @@ jobs:
           echo "| Linux | x86_64 | \`omnishell-x86_64-linux.tar.gz\` |" >> CHANGELOG.md
           echo "| Linux | aarch64 | \`omnishell-aarch64-linux.tar.gz\` |" >> CHANGELOG.md
           echo "| macOS | Apple Silicon | \`omnishell-aarch64-macos.tar.gz\` |" >> CHANGELOG.md
-          echo "| macOS | Intel | \`omnishell-x86_64-macos.tar.gz\` |" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "## Windows" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "Use the Linux x86_64 binary under WSL (Windows Subsystem for Linux)." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## macOS Intel" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "Build from source: \`cargo build --release\`" >> CHANGELOG.md
 
           cat CHANGELOG.md
 
