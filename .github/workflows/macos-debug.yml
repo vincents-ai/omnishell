@@ -26,20 +26,11 @@ jobs:
       - name: Rust version
         run: rustc --version && cargo --version
 
-      - name: Check cargo tree for glob
-        run: cargo tree -p glob --target ${{ matrix.target }}
+      - name: Check cargo check (debug, with --target)
+        run: cargo check --target ${{ matrix.target }} 2>&1; echo "EXIT=$?"
 
-      - name: Check cargo tree for tracing
-        run: cargo tree -p tracing --target ${{ matrix.target }}
+      - name: Check cargo check (debug, without --target)
+        run: cargo check 2>&1; echo "EXIT=$?"
 
-      - name: Check cargo tree for dirs
-        run: cargo tree -p dirs --target ${{ matrix.target }}
-
-      - name: Check cargo check (debug)
-        run: cargo check --target ${{ matrix.target }} 2>&1 || true
-
-      - name: Check cargo check without --target
-        run: cargo check 2>&1 || true
-
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }} 2>&1 || true
+      - name: Build release (with --target)
+        run: cargo build --release --target ${{ matrix.target }} 2>&1; echo "EXIT=$?"
