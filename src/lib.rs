@@ -19,6 +19,7 @@ pub mod picker;
 pub mod picture;
 pub mod plugin;
 pub mod profile;
+#[cfg(target_os = "linux")]
 pub mod sandbox;
 pub mod snapshot;
 pub mod theme;

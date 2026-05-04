@@ -43,6 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+          rustup target add aarch64-unknown-linux-gnu
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -118,6 +119,10 @@ jobs:
           echo "| Linux | aarch64 | \`omnishell-aarch64-linux.tar.gz\` |" >> CHANGELOG.md
           echo "| macOS | Apple Silicon | \`omnishell-aarch64-macos.tar.gz\` |" >> CHANGELOG.md
           echo "| macOS | Intel | \`omnishell-x86_64-macos.tar.gz\` |" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## Windows" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "Use the Linux x86_64 binary under WSL (Windows Subsystem for Linux)." >> CHANGELOG.md
 
           cat CHANGELOG.md
 
