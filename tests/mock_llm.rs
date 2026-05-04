@@ -8,25 +8,38 @@
 //! - Timeout handling
 //! - Error recovery
 
-use omnishell::llm_integration::{
-    LlmClient, LlmConfig, LlmResponse, system_prompt,
-};
+use omnishell::llm_integration::{system_prompt, LlmClient, LlmConfig, LlmResponse};
 use omnishell::profile::Mode;
 
 #[test]
 fn test_system_prompt_contains_mode_specific_content() {
     let kids = system_prompt(Mode::Kids);
-    assert!(kids.contains("OmniTutor"), "Kids prompt should mention OmniTutor");
-    assert!(kids.contains("NEVER execute"), "Kids prompt should forbid execution");
+    assert!(
+        kids.contains("OmniTutor"),
+        "Kids prompt should mention OmniTutor"
+    );
+    assert!(
+        kids.contains("NEVER execute"),
+        "Kids prompt should forbid execution"
+    );
     assert!(kids.contains("5-9"), "Kids prompt should specify age range");
 
     let agent = system_prompt(Mode::Agent);
-    assert!(agent.contains("JSON format"), "Agent prompt should require JSON");
-    assert!(agent.contains("coding agent"), "Agent prompt should identify as coding agent");
+    assert!(
+        agent.contains("JSON format"),
+        "Agent prompt should require JSON"
+    );
+    assert!(
+        agent.contains("coding agent"),
+        "Agent prompt should identify as coding agent"
+    );
     assert!(agent.contains("sudo"), "Agent prompt should forbid sudo");
 
     let admin = system_prompt(Mode::Admin);
-    assert!(admin.contains("system administrator"), "Admin prompt should be for sysadmin");
+    assert!(
+        admin.contains("system administrator"),
+        "Admin prompt should be for sysadmin"
+    );
 }
 
 #[test]
@@ -75,7 +88,10 @@ fn test_llm_client_enabled_graceful_degradation() {
     let response = client.query_sync("test query");
     match response {
         LlmResponse::Error(msg) => {
-            assert!(msg.contains("pending"), "Should mention pending integration");
+            assert!(
+                msg.contains("provider") || msg.contains("No LLM"),
+                "Should mention provider issue: {msg}"
+            );
         }
         LlmResponse::Success(_) => {
             // If somehow it works, that's fine too
@@ -92,7 +108,7 @@ fn test_llm_config_defaults() {
     assert!(config.enabled, "LLM should be enabled by default");
     assert_eq!(config.temperature, 0.7, "Default temperature should be 0.7");
     assert_eq!(config.max_tokens, 1024, "Default max_tokens should be 1024");
-    assert_eq!(config.model, "default", "Default model should be 'default'");
+    assert_eq!(config.model, "gpt-4o", "Default model should be 'gpt-4o'");
 }
 
 #[test]
@@ -102,6 +118,7 @@ fn test_llm_config_custom() {
         model: "gpt-4".to_string(),
         temperature: 0.0,
         max_tokens: 2048,
+        ..Default::default()
     };
     assert!(!config.enabled);
     assert_eq!(config.model, "gpt-4");
@@ -116,6 +133,7 @@ fn test_llm_config_serialization_roundtrip() {
         model: "test-model".to_string(),
         temperature: 0.5,
         max_tokens: 512,
+        ..Default::default()
     };
     let json = serde_json::to_string(&config).unwrap();
     let parsed: LlmConfig = serde_json::from_str(&json).unwrap();
@@ -147,8 +165,14 @@ fn test_kids_prompt_emoji_friendly() {
 #[test]
 fn test_agent_prompt_mentions_json_schema() {
     let prompt = system_prompt(Mode::Agent);
-    assert!(prompt.contains("command"), "Agent prompt should define command schema");
-    assert!(prompt.contains("explanation"), "Agent prompt should define explanation field");
+    assert!(
+        prompt.contains("command"),
+        "Agent prompt should define command schema"
+    );
+    assert!(
+        prompt.contains("explanation"),
+        "Agent prompt should define explanation field"
+    );
 }
 
 #[test]

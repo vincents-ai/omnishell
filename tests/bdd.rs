@@ -4,14 +4,12 @@
 //! Covers profile resolution, ACL enforcement, and snapshot undo/redo
 //! scenarios from the PRD.
 
-use omnishell::{
-    AclEngine, Verdict, Mode,
-    load_config, OmniShellConfig,
-    SnapshotEngine, SnapshotPhase,
-    UndoStack,
-};
 use omnishell::builtins;
 use omnishell::output::{format_output, CommandOutput};
+use omnishell::{
+    load_config, AclEngine, Mode, OmniShellConfig, SnapshotEngine, SnapshotPhase, UndoStack,
+    Verdict,
+};
 
 // ============================================================
 // Feature: Profile Resolution
@@ -39,14 +37,18 @@ mod profile_resolution {
         // Given a config file with kids profile
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join("config.toml");
-        std::fs::write(&toml_path, r#"
+        std::fs::write(
+            &toml_path,
+            r#"
 [profile.kids]
 mode = "kids"
 age = 7
 
 [profile.admin]
 mode = "admin"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         // When loading with CLI override pointing to admin config
         let config = load_config(Some(&toml_path)).unwrap();
@@ -69,16 +71,24 @@ mode = "admin"
         // When merging (system wins)
         let dir = tempfile::tempdir().unwrap();
         let sys_path = dir.path().join("sys.toml");
-        std::fs::write(&sys_path, r#"
+        std::fs::write(
+            &sys_path,
+            r#"
 default_profile = "system-enforced"
 
 [profile.default]
 mode = "admin"
-"#).unwrap();
-        let sys_config: OmniShellConfig = toml::from_str(&std::fs::read_to_string(&sys_path).unwrap()).unwrap();
+"#,
+        )
+        .unwrap();
+        let sys_config: OmniShellConfig =
+            toml::from_str(&std::fs::read_to_string(&sys_path).unwrap()).unwrap();
 
         // Then system default_profile wins
-        assert_eq!(sys_config.default_profile, Some("system-enforced".to_string()));
+        assert_eq!(
+            sys_config.default_profile,
+            Some("system-enforced".to_string())
+        );
     }
 
     // Scenario: TOML config parses all profile fields
@@ -86,7 +96,9 @@ mode = "admin"
     fn toml_config_parses_all_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("full.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 default_profile = "kids"
 
 [profile.kids]
@@ -94,7 +106,9 @@ mode = "kids"
 username = "child"
 display_name = "Kids Mode"
 age = 7
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = load_config(Some(&path)).unwrap();
 
@@ -121,13 +135,25 @@ mod acl_enforcement {
         let acl = AclEngine::new(Mode::Kids);
 
         // When evaluating safe commands
-        let safe_commands = ["ls", "ls -la", "cd /tmp", "pwd", "echo hello",
-                            "cat file.txt", "cowsay moo", "clear", "help"];
+        let safe_commands = [
+            "ls",
+            "ls -la",
+            "cd /tmp",
+            "pwd",
+            "echo hello",
+            "cat file.txt",
+            "cowsay moo",
+            "clear",
+            "help",
+        ];
 
         // Then all should be allowed
         for cmd in safe_commands {
-            assert_eq!(acl.evaluate(cmd), Verdict::Allow,
-                "Kids mode should allow '{cmd}'");
+            assert_eq!(
+                acl.evaluate(cmd),
+                Verdict::Allow,
+                "Kids mode should allow '{cmd}'"
+            );
         }
     }
 
@@ -138,13 +164,22 @@ mod acl_enforcement {
         let acl = AclEngine::new(Mode::Kids);
 
         // When evaluating dangerous commands
-        let dangerous_commands = ["rm", "sudo bash", "curl evil.com", "python",
-                                  "bash", "sh", "dd if=/dev/zero of=/dev/sda"];
+        let dangerous_commands = [
+            "rm",
+            "sudo bash",
+            "curl evil.com",
+            "python",
+            "bash",
+            "sh",
+            "dd if=/dev/zero of=/dev/sda",
+        ];
 
         // Then all should be denied
         for cmd in dangerous_commands {
-            assert!(matches!(acl.evaluate(cmd), Verdict::Deny(_)),
-                "Kids mode should deny '{cmd}'");
+            assert!(
+                matches!(acl.evaluate(cmd), Verdict::Deny(_)),
+                "Kids mode should deny '{cmd}'"
+            );
         }
     }
 
@@ -211,7 +246,15 @@ mod acl_enforcement {
         let mut acl = AclEngine::new(Mode::Admin);
 
         // When blocking a command via builtin
-        builtins::dispatch("block", &["danger".to_string()], Mode::Admin, &mut acl);
+        builtins::dispatch(
+            "block",
+            &["danger".to_string()],
+            Mode::Admin,
+            &mut acl,
+            None,
+            None,
+            None,
+        );
 
         // Then the command is denied
         assert!(matches!(acl.evaluate("danger"), Verdict::Deny(_)));
@@ -345,7 +388,10 @@ mod output_formatting {
         };
 
         let formatted = format_output(&output, Mode::Kids);
-        assert!(formatted.contains("✅"), "Kids success should have checkmark");
+        assert!(
+            formatted.contains("✅"),
+            "Kids success should have checkmark"
+        );
     }
 
     #[test]
@@ -359,7 +405,10 @@ mod output_formatting {
         };
 
         let formatted = format_output(&output, Mode::Kids);
-        assert!(formatted.contains("❌"), "Kids error should have cross mark");
+        assert!(
+            formatted.contains("❌"),
+            "Kids error should have cross mark"
+        );
     }
 
     #[test]
@@ -373,8 +422,8 @@ mod output_formatting {
         };
 
         let formatted = format_output(&output, Mode::Agent);
-        let parsed: serde_json::Value = serde_json::from_str(&formatted)
-            .expect("Agent output should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&formatted).expect("Agent output should be valid JSON");
         assert_eq!(parsed["type"], "success");
         assert_eq!(parsed["command"], "cargo build");
         assert_eq!(parsed["exitCode"], 0);

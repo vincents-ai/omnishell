@@ -120,9 +120,8 @@ pub fn format_error(message: &str, mode: Mode) -> String {
                 exit_code: 1,
                 duration_ms: 0,
             };
-            serde_json::to_string(&envelope).unwrap_or_else(|_| {
-                format!(r#"{{"type":"error","stderr":"{message}"}}"#)
-            })
+            serde_json::to_string(&envelope)
+                .unwrap_or_else(|_| format!(r#"{{"type":"error","stderr":"{message}"}}"#))
         }
         Mode::Admin => format!("error: {message}"),
     }

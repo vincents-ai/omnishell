@@ -262,10 +262,13 @@ mod tests {
 
     #[test]
     fn test_push_and_recent() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("ls", 0, None);
         history.push("cd /tmp", 0, None);
@@ -279,11 +282,14 @@ mod tests {
 
     #[test]
     fn test_deduplicate_consecutive() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            deduplicate: true,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                deduplicate: true,
+                ..Default::default()
+            },
+        );
 
         history.push("ls", 0, None);
         history.push("ls", 0, None);
@@ -294,11 +300,14 @@ mod tests {
 
     #[test]
     fn test_no_deduplicate_different_commands() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            deduplicate: true,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                deduplicate: true,
+                ..Default::default()
+            },
+        );
 
         history.push("ls", 0, None);
         history.push("pwd", 0, None);
@@ -309,10 +318,13 @@ mod tests {
 
     #[test]
     fn test_search() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("cargo build", 0, None);
         history.push("cargo test", 0, None);
@@ -324,10 +336,13 @@ mod tests {
 
     #[test]
     fn test_search_case_insensitive() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("Cargo Build", 0, None);
         let results = history.search("cargo");
@@ -336,10 +351,13 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("ls", 0, None);
         history.push("pwd", 0, None);
@@ -351,11 +369,14 @@ mod tests {
 
     #[test]
     fn test_max_entries_enforcement() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            max_entries: 3,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                max_entries: 3,
+                ..Default::default()
+            },
+        );
 
         history.push("cmd1", 0, None);
         history.push("cmd2", 0, None);
@@ -369,10 +390,13 @@ mod tests {
 
     #[test]
     fn test_empty_command_skipped() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("", 0, None);
         history.push("   ", 0, None);
@@ -416,17 +440,26 @@ mod tests {
 
         assert_eq!(history2.len(), 2);
         assert_eq!(history2.entries[0].command, "cargo build");
-        assert_eq!(history2.entries[0].working_dir, Some("/home/user/project".to_string()));
+        assert_eq!(
+            history2.entries[0].working_dir,
+            Some("/home/user/project".to_string())
+        );
     }
 
     #[test]
     fn test_working_dir_recorded() {
-        let mut history = History::new(Mode::Admin, HistoryConfig {
-            persistent: false,
-            ..Default::default()
-        });
+        let mut history = History::new(
+            Mode::Admin,
+            HistoryConfig {
+                persistent: false,
+                ..Default::default()
+            },
+        );
 
         history.push("ls", 0, Some(Path::new("/home/user")));
-        assert_eq!(history.entries[0].working_dir, Some("/home/user".to_string()));
+        assert_eq!(
+            history.entries[0].working_dir,
+            Some("/home/user".to_string())
+        );
     }
 }

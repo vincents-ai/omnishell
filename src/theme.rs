@@ -138,7 +138,13 @@ impl Theme {
     }
 
     /// Render the prompt with variables filled in.
-    pub fn render_prompt(&self, user: &str, host: &str, cwd: &str, git_branch: Option<&str>) -> String {
+    pub fn render_prompt(
+        &self,
+        user: &str,
+        host: &str,
+        cwd: &str,
+        git_branch: Option<&str>,
+    ) -> String {
         let emoji = self.emoji.as_deref().unwrap_or("");
         let mode = match self.name.as_str() {
             "kids" => "kids",

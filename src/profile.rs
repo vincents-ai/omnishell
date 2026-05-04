@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
 use crate::theme::Theme;
+use serde::{Deserialize, Serialize};
 
 /// Top-level configuration container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,12 +63,24 @@ pub struct LlmConfig {
     pub timeout_secs: u64,
 }
 
-fn default_true() -> bool { true }
-fn default_provider() -> String { "openai".to_string() }
-fn default_model() -> String { "gpt-4o".to_string() }
-fn default_temperature() -> f32 { 0.7 }
-fn default_max_tokens() -> u32 { 1024 }
-fn default_timeout() -> u64 { 30 }
+fn default_true() -> bool {
+    true
+}
+fn default_provider() -> String {
+    "openai".to_string()
+}
+fn default_model() -> String {
+    "gpt-4o".to_string()
+}
+fn default_temperature() -> f32 {
+    0.7
+}
+fn default_max_tokens() -> u32 {
+    1024
+}
+fn default_timeout() -> u64 {
+    30
+}
 
 impl Default for LlmConfig {
     fn default() -> Self {
@@ -127,6 +139,41 @@ pub struct Profile {
     /// If not set, the mode default theme is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOverride>,
+
+    /// Environment variable allowlist for spawned commands.
+    /// If set, only these vars are passed to child processes.
+    /// If not set, all vars are passed (unless filtered by env_deny).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_allow: Option<Vec<String>>,
+
+    /// Environment variable denylist for spawned commands.
+    /// These vars are removed from the child process environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_deny: Option<Vec<String>>,
+
+    /// Shell aliases for this profile (name -> expansion).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub aliases: HashMap<String, String>,
+
+    /// System prompt configuration mode.
+    #[serde(default)]
+    pub system_prompt_mode: SystemPromptMode,
+
+    /// Custom system prompt text (used when mode is Override or Append).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_extra: Option<String>,
+}
+
+/// System prompt configuration mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SystemPromptMode {
+    /// Use the built-in template for the mode.
+    #[default]
+    Default,
+    /// Replace the entire system prompt with custom text.
+    Override,
+    /// Append extra instructions to the default template.
+    Append,
 }
 
 /// Theme overrides for a profile.
@@ -158,6 +205,30 @@ impl Profile {
         }
         theme
     }
+
+    /// Filter environment variables for child processes.
+    /// Returns a HashMap suitable for Command::envs().
+    pub fn filtered_env(&self) -> HashMap<String, String> {
+        let all: HashMap<String, String> = std::env::vars().collect();
+
+        let mut result = match &self.env_allow {
+            Some(allow) => {
+                // Only include explicitly allowed vars
+                all.into_iter()
+                    .filter(|(k, _)| allow.iter().any(|a| a == k))
+                    .collect()
+            }
+            None => all,
+        };
+
+        if let Some(deny) = &self.env_deny {
+            for d in deny {
+                result.remove(d);
+            }
+        }
+
+        result
+    }
 }
 
 /// Execution mode.
@@ -170,13 +241,45 @@ pub enum Mode {
     Agent,
 }
 
+impl Mode {
+    /// Default Kids profile with strict env var allowlist.
+    pub fn kids_profile() -> Profile {
+        Profile {
+            mode: Mode::Kids,
+            username: None,
+            display_name: Some("Kids".to_string()),
+            age: Some(10),
+            llm: None,
+            acl: None,
+            theme: None,
+            env_allow: Some(vec![
+                "PATH".to_string(),
+                "HOME".to_string(),
+                "USER".to_string(),
+                "TERM".to_string(),
+                "LANG".to_string(),
+                "XDG_CONFIG_HOME".to_string(),
+                "XDG_DATA_HOME".to_string(),
+            ]),
+            env_deny: None,
+            aliases: HashMap::from([
+                ("dir".to_string(), "ls".to_string()),
+                ("cls".to_string(), "clear".to_string()),
+                ("copy".to_string(), "cp".to_string()),
+                ("move".to_string(), "mv".to_string()),
+                ("del".to_string(), "rm -i".to_string()),
+                ("type".to_string(), "cat".to_string()),
+            ]),
+            system_prompt_mode: SystemPromptMode::Default,
+            system_prompt_extra: None,
+        }
+    }
+}
+
 impl Default for OmniShellConfig {
     fn default() -> Self {
         let mut profile = HashMap::new();
-        profile.insert(
-            "default".to_string(),
-            Profile::default(),
-        );
+        profile.insert("default".to_string(), Profile::default());
         Self {
             profile,
             default_profile: Some("default".to_string()),
@@ -277,18 +380,23 @@ max_tokens = 256
 
     #[test]
     fn test_profile_theme_prompt_override() {
-        let mut profile = Profile::default();
-        profile.theme = Some(ThemeOverride {
-            prompt: Some("custom> ".to_string()),
-            emoji: None,
-        });
+        let profile = Profile {
+            theme: Some(ThemeOverride {
+                prompt: Some("custom> ".to_string()),
+                emoji: None,
+            }),
+            ..Default::default()
+        };
         let theme = profile.theme();
         assert_eq!(theme.prompt, "custom> ");
     }
 
     #[test]
     fn test_profile_theme_emoji_override() {
-        let mut profile = Profile { mode: Mode::Kids, ..Default::default() };
+        let mut profile = Profile {
+            mode: Mode::Kids,
+            ..Default::default()
+        };
         profile.theme = Some(ThemeOverride {
             prompt: None,
             emoji: Some("🎮".to_string()),
@@ -321,6 +429,9 @@ emoji = "🛸"
             ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("secret-key"), "API key must not appear in serialized output");
+        assert!(
+            !json.contains("secret-key"),
+            "API key must not appear in serialized output"
+        );
     }
 }

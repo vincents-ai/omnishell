@@ -4,10 +4,8 @@
 //! access control. Actual namespace operations (clone, mount, chroot)
 //! require CAP_SYS_ADMIN and are tested separately in privileged CI.
 
-use omnishell::sandbox::{
-    Sandbox, SandboxConfig, BindMount, ResourceLimit, RlimitResource,
-};
 use omnishell::profile::Mode;
+use omnishell::sandbox::{BindMount, ResourceLimit, RlimitResource, Sandbox, SandboxConfig};
 
 // --- Configuration tests (all platforms) ---
 
@@ -16,13 +14,16 @@ fn test_kids_sandbox_has_readonly_system_mounts() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
 
     // Should bind-mount system dirs read-only
-    let readonly_mounts: Vec<&BindMount> = config.bind_mounts.iter()
-        .filter(|m| m.read_only)
-        .collect();
+    let readonly_mounts: Vec<&BindMount> =
+        config.bind_mounts.iter().filter(|m| m.read_only).collect();
 
-    assert!(!readonly_mounts.is_empty(), "Kids sandbox should have read-only mounts");
+    assert!(
+        !readonly_mounts.is_empty(),
+        "Kids sandbox should have read-only mounts"
+    );
 
-    let mount_dests: Vec<&str> = readonly_mounts.iter()
+    let mount_dests: Vec<&str> = readonly_mounts
+        .iter()
         .map(|m| m.destination.to_str().unwrap())
         .collect();
 
@@ -35,11 +36,23 @@ fn test_kids_sandbox_has_readonly_system_mounts() {
 fn test_kids_sandbox_has_resource_limits() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
 
-    assert!(!config.rlimits.is_empty(), "Kids sandbox should have resource limits");
+    assert!(
+        !config.rlimits.is_empty(),
+        "Kids sandbox should have resource limits"
+    );
 
-    let has_process_limit = config.rlimits.iter().any(|r| matches!(r.resource, RlimitResource::Processes));
-    let has_file_limit = config.rlimits.iter().any(|r| matches!(r.resource, RlimitResource::OpenFiles));
-    let has_size_limit = config.rlimits.iter().any(|r| matches!(r.resource, RlimitResource::FileSize));
+    let has_process_limit = config
+        .rlimits
+        .iter()
+        .any(|r| matches!(r.resource, RlimitResource::Processes));
+    let has_file_limit = config
+        .rlimits
+        .iter()
+        .any(|r| matches!(r.resource, RlimitResource::OpenFiles));
+    let has_size_limit = config
+        .rlimits
+        .iter()
+        .any(|r| matches!(r.resource, RlimitResource::FileSize));
 
     assert!(has_process_limit, "Should limit processes");
     assert!(has_file_limit, "Should limit open files");
@@ -50,43 +63,68 @@ fn test_kids_sandbox_has_resource_limits() {
 fn test_kids_sandbox_process_limit_is_reasonable() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
 
-    let process_limit = config.rlimits.iter()
+    let process_limit = config
+        .rlimits
+        .iter()
         .find(|r| matches!(r.resource, RlimitResource::Processes))
         .unwrap();
 
-    assert!(process_limit.hard <= 200, "Hard process limit should be <= 200");
-    assert!(process_limit.soft <= process_limit.hard, "Soft limit should not exceed hard");
+    assert!(
+        process_limit.hard <= 200,
+        "Hard process limit should be <= 200"
+    );
+    assert!(
+        process_limit.soft <= process_limit.hard,
+        "Soft limit should not exceed hard"
+    );
 }
 
 #[test]
 fn test_kids_sandbox_file_size_limit_is_reasonable() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
 
-    let file_limit = config.rlimits.iter()
+    let file_limit = config
+        .rlimits
+        .iter()
         .find(|r| matches!(r.resource, RlimitResource::FileSize))
         .unwrap();
 
     // Should be at most 100 MB
-    assert!(file_limit.hard <= 100 * 1024 * 1024, "Hard file size limit should be <= 100MB");
+    assert!(
+        file_limit.hard <= 100 * 1024 * 1024,
+        "Hard file size limit should be <= 100MB"
+    );
 }
 
 #[test]
 fn test_kids_sandbox_has_pid_namespace() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
-    assert!(config.new_pid_namespace, "Kids sandbox should create new PID namespace");
+    assert!(
+        config.new_pid_namespace,
+        "Kids sandbox should create new PID namespace"
+    );
 }
 
 #[test]
 fn test_kids_sandbox_has_network_namespace() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
-    assert!(config.new_network_namespace, "Kids sandbox should create new network namespace");
+    assert!(
+        config.new_network_namespace,
+        "Kids sandbox should create new network namespace"
+    );
 }
 
 #[test]
 fn test_disabled_sandbox_has_no_namespaces() {
     let config = Sandbox::disabled();
-    assert!(!config.new_pid_namespace, "Disabled sandbox should not have PID namespace");
-    assert!(!config.new_network_namespace, "Disabled sandbox should not have network namespace");
+    assert!(
+        !config.new_pid_namespace,
+        "Disabled sandbox should not have PID namespace"
+    );
+    assert!(
+        !config.new_network_namespace,
+        "Disabled sandbox should not have network namespace"
+    );
 }
 
 #[test]
@@ -145,7 +183,8 @@ fn test_rlimit_resource_serde_variants() {
     ] {
         let json = serde_json::to_string(&resource).unwrap();
         let parsed: RlimitResource = serde_json::from_str(&json).unwrap();
-        assert!(format!("{parsed:?}").contains(format!("{resource:?}").split_whitespace().next().unwrap()));
+        assert!(format!("{parsed:?}")
+            .contains(format!("{resource:?}").split_whitespace().next().unwrap()));
     }
 }
 
@@ -193,6 +232,12 @@ fn test_sandbox_prepare_disabled_is_noop() {
 #[test]
 fn test_sandbox_root_dir_in_home() {
     let config = Sandbox::kids_default(std::path::Path::new("/home/child"));
-    assert!(config.root_dir.starts_with("/home/child"), "Sandbox root should be under home");
-    assert!(config.root_dir.to_str().unwrap().contains("sandbox"), "Sandbox root should contain 'sandbox'");
+    assert!(
+        config.root_dir.starts_with("/home/child"),
+        "Sandbox root should be under home"
+    );
+    assert!(
+        config.root_dir.to_str().unwrap().contains("sandbox"),
+        "Sandbox root should contain 'sandbox'"
+    );
 }

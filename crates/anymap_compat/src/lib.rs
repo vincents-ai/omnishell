@@ -51,16 +51,12 @@ impl Map {
 
     pub fn get<T: 'static>(&self) -> Option<&T> {
         let id = TypeId::of::<T>();
-        self.inner
-            .get(&id)
-            .and_then(|v| v.downcast_ref::<T>())
+        self.inner.get(&id).and_then(|v| v.downcast_ref::<T>())
     }
 
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         let id = TypeId::of::<T>();
-        self.inner
-            .get_mut(&id)
-            .and_then(|v| v.downcast_mut::<T>())
+        self.inner.get_mut(&id).and_then(|v| v.downcast_mut::<T>())
     }
 
     pub fn contains<T: 'static>(&self) -> bool {
@@ -90,8 +86,14 @@ impl Map {
     pub fn entry<T: Any>(&mut self) -> Entry<'_, T> {
         let id = TypeId::of::<T>();
         match self.inner.entry(id) {
-            hash_map::Entry::Occupied(e) => Entry::Occupied(OccupiedEntry { inner: e, _marker: PhantomData }),
-            hash_map::Entry::Vacant(e) => Entry::Vacant(VacantEntry { inner: e, _marker: PhantomData }),
+            hash_map::Entry::Occupied(e) => Entry::Occupied(OccupiedEntry {
+                inner: e,
+                _marker: PhantomData,
+            }),
+            hash_map::Entry::Vacant(e) => Entry::Vacant(VacantEntry {
+                inner: e,
+                _marker: PhantomData,
+            }),
         }
     }
 }

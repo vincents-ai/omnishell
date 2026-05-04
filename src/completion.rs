@@ -54,10 +54,12 @@ impl CompletionEngine {
         if mode == Mode::Kids {
             // Kids mode: only allowlist commands from ACL
             for rule in &acl.allowlist {
-                if rule.pattern.starts_with(partial) && !rule.pattern.contains('*')
-                    && !candidates.contains(&rule.pattern) {
-                        candidates.push(rule.pattern.clone());
-                    }
+                if rule.pattern.starts_with(partial)
+                    && !rule.pattern.contains('*')
+                    && !candidates.contains(&rule.pattern)
+                {
+                    candidates.push(rule.pattern.clone());
+                }
             }
         } else {
             // Agent/Admin: full PATH scan
@@ -87,9 +89,7 @@ impl CompletionEngine {
         let (dir, prefix) = if partial.contains('/') {
             let path = PathBuf::from(partial);
             let parent = path.parent().unwrap_or(std::path::Path::new("."));
-            let file_prefix = path.file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or("");
+            let file_prefix = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
             (parent.to_path_buf(), file_prefix.to_string())
         } else {
             (PathBuf::from("."), partial.to_string())
@@ -146,10 +146,22 @@ fn scan_path() -> HashSet<String> {
 
 /// Get the set of built-in command names.
 fn builtin_names() -> HashSet<String> {
-    ["?", "ai", "snapshots", "undo", "redo", "allow", "block", "mode", "help", "exit", "quit"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "?",
+        "ai",
+        "snapshots",
+        "undo",
+        "redo",
+        "allow",
+        "block",
+        "mode",
+        "help",
+        "exit",
+        "quit",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// shrs Completer trait implementation for mode-aware tab completion.
@@ -158,13 +170,16 @@ impl shrs::prelude::Completer for CompletionEngine {
         let partial = ctx.cur_word().map(|s| s.as_str()).unwrap_or("");
         let candidates = self.complete(partial, self.mode, &self.acl);
 
-        candidates.into_iter().map(|c| shrs::prelude::Completion {
-            add_space: true,
-            display: Some(c.clone()),
-            completion: c,
-            replace_method: shrs::prelude::ReplaceMethod::Replace,
-            comment: None,
-        }).collect()
+        candidates
+            .into_iter()
+            .map(|c| shrs::prelude::Completion {
+                add_space: true,
+                display: Some(c.clone()),
+                completion: c,
+                replace_method: shrs::prelude::ReplaceMethod::Replace,
+                comment: None,
+            })
+            .collect()
     }
 
     fn register(&mut self, _rule: shrs::prelude::Rule) {
@@ -225,9 +240,7 @@ mod tests {
         std::fs::write(dir.path().join("test_file.txt"), "").unwrap();
         std::fs::write(dir.path().join("test_other.txt"), "").unwrap();
 
-        let results = engine.complete_args(
-            &format!("{}/test_", dir.path().display())
-        );
+        let results = engine.complete_args(&format!("{}/test_", dir.path().display()));
 
         assert!(results.iter().any(|r| r.contains("test_file")));
         assert!(results.iter().any(|r| r.contains("test_other")));

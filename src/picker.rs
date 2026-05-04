@@ -8,7 +8,7 @@
 
 use std::io::{self, Write};
 
-use crate::profile::{OmniShellConfig, Mode};
+use crate::profile::{Mode, OmniShellConfig};
 
 /// A profile card for display.
 #[derive(Debug, Clone)]
@@ -29,10 +29,16 @@ pub fn generate_cards(config: &OmniShellConfig) -> Vec<ProfileCard> {
 
     for (name, profile) in &config.profile {
         let (emoji, desc) = match profile.mode {
-            Mode::Kids => ("🧒", format!(
-                "Kids Mode — Learn terminal!{}",
-                profile.age.map(|a| format!(" (Age {a})")).unwrap_or_default()
-            )),
+            Mode::Kids => (
+                "🧒",
+                format!(
+                    "Kids Mode — Learn terminal!{}",
+                    profile
+                        .age
+                        .map(|a| format!(" (Age {a})"))
+                        .unwrap_or_default()
+                ),
+            ),
             Mode::Agent => ("🤖", "Agent Mode — AI coding assistant".to_string()),
             Mode::Admin => ("⚡", "Admin Mode — Full access".to_string()),
         };
@@ -68,10 +74,7 @@ pub fn render_picker(cards: &[ProfileCard]) -> String {
         let num = i + 1;
         out.push_str(&format!(
             "║  {} {} │ {}  {}\n",
-            num,
-            card.emoji,
-            card.name,
-            card.description,
+            num, card.emoji, card.name, card.description,
         ));
     }
 
@@ -129,19 +132,28 @@ mod tests {
 
     fn make_config() -> OmniShellConfig {
         let mut profile = HashMap::new();
-        profile.insert("kids".to_string(), Profile {
-            mode: Mode::Kids,
-            age: Some(7),
-            ..Default::default()
-        });
-        profile.insert("agent".to_string(), Profile {
-            mode: Mode::Agent,
-            ..Default::default()
-        });
-        profile.insert("admin".to_string(), Profile {
-            mode: Mode::Admin,
-            ..Default::default()
-        });
+        profile.insert(
+            "kids".to_string(),
+            Profile {
+                mode: Mode::Kids,
+                age: Some(7),
+                ..Default::default()
+            },
+        );
+        profile.insert(
+            "agent".to_string(),
+            Profile {
+                mode: Mode::Agent,
+                ..Default::default()
+            },
+        );
+        profile.insert(
+            "admin".to_string(),
+            Profile {
+                mode: Mode::Admin,
+                ..Default::default()
+            },
+        );
         OmniShellConfig {
             profile,
             default_profile: None,
@@ -187,10 +199,13 @@ mod tests {
     #[test]
     fn test_single_profile_auto_selects() {
         let mut profile = HashMap::new();
-        profile.insert("only".to_string(), Profile {
-            mode: Mode::Admin,
-            ..Default::default()
-        });
+        profile.insert(
+            "only".to_string(),
+            Profile {
+                mode: Mode::Admin,
+                ..Default::default()
+            },
+        );
         let config = OmniShellConfig {
             profile,
             ..Default::default()

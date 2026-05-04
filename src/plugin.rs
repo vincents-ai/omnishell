@@ -11,9 +11,9 @@
 use std::any::Any;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
 use crate::profile::Profile;
 use crate::OmniShellConfig;
+use serde::{Deserialize, Serialize};
 
 /// Plugin metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,7 +129,12 @@ impl OmniShellBuilder {
     }
 
     /// Run before_command hooks for all plugins. Returns the first Deny or Replace.
-    pub fn before_command(&self, command: &str, profile: &Profile, working_dir: &Path) -> PluginCommandAction {
+    pub fn before_command(
+        &self,
+        command: &str,
+        profile: &Profile,
+        working_dir: &Path,
+    ) -> PluginCommandAction {
         let ctx = PluginContext {
             profile,
             config: &self.config,
@@ -147,7 +152,13 @@ impl OmniShellBuilder {
     }
 
     /// Run after_command hooks for all plugins.
-    pub fn after_command(&self, command: &str, exit_code: i32, profile: &Profile, working_dir: &Path) {
+    pub fn after_command(
+        &self,
+        command: &str,
+        exit_code: i32,
+        profile: &Profile,
+        working_dir: &Path,
+    ) {
         let ctx = PluginContext {
             profile,
             config: &self.config,
@@ -269,7 +280,10 @@ mod tests {
     use crate::profile::Mode;
 
     fn make_profile() -> Profile {
-        Profile { mode: Mode::Admin, ..Default::default() }
+        Profile {
+            mode: Mode::Admin,
+            ..Default::default()
+        }
     }
 
     fn make_config() -> OmniShellConfig {
@@ -279,8 +293,12 @@ mod tests {
     #[test]
     fn test_builder_add_plugins() {
         let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(EchoPlugin { prefix: ">".to_string() })
-            .with_plugin(BlocklistPlugin { blocked: vec!["rm".to_string()] });
+            .with_plugin(EchoPlugin {
+                prefix: ">".to_string(),
+            })
+            .with_plugin(BlocklistPlugin {
+                blocked: vec!["rm".to_string()],
+            });
 
         assert_eq!(builder.plugin_count(), 2);
         let metas = builder.plugin_metas();
@@ -290,8 +308,9 @@ mod tests {
 
     #[test]
     fn test_before_command_allow() {
-        let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(EchoPlugin { prefix: ">".to_string() });
+        let builder = OmniShellBuilder::new(make_config()).with_plugin(EchoPlugin {
+            prefix: ">".to_string(),
+        });
 
         let profile = make_profile();
         let action = builder.before_command("ls", &profile, Path::new("/tmp"));
@@ -300,8 +319,9 @@ mod tests {
 
     #[test]
     fn test_before_command_deny() {
-        let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(BlocklistPlugin { blocked: vec!["rm".to_string()] });
+        let builder = OmniShellBuilder::new(make_config()).with_plugin(BlocklistPlugin {
+            blocked: vec!["rm".to_string()],
+        });
 
         let profile = make_profile();
         let action = builder.before_command("rm file.txt", &profile, Path::new("/tmp"));
@@ -311,8 +331,12 @@ mod tests {
     #[test]
     fn test_before_command_multiple_plugins_first_deny_wins() {
         let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(BlocklistPlugin { blocked: vec!["rm".to_string()] })
-            .with_plugin(EchoPlugin { prefix: ">".to_string() });
+            .with_plugin(BlocklistPlugin {
+                blocked: vec!["rm".to_string()],
+            })
+            .with_plugin(EchoPlugin {
+                prefix: ">".to_string(),
+            });
 
         let profile = make_profile();
         let action = builder.before_command("rm file.txt", &profile, Path::new("/tmp"));
@@ -322,8 +346,7 @@ mod tests {
     #[test]
     fn test_after_command_audit() {
         let audit = AuditPlugin::new();
-        let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(audit);
+        let builder = OmniShellBuilder::new(make_config()).with_plugin(audit);
 
         let profile = make_profile();
         builder.after_command("ls -la", 0, &profile, Path::new("/tmp"));
@@ -355,8 +378,9 @@ mod tests {
 
     #[test]
     fn test_init_plugins() {
-        let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(EchoPlugin { prefix: ">".to_string() });
+        let builder = OmniShellBuilder::new(make_config()).with_plugin(EchoPlugin {
+            prefix: ">".to_string(),
+        });
 
         let profile = make_profile();
         let errors = builder.init_plugins(&profile, Path::new("/tmp"));
@@ -368,7 +392,11 @@ mod tests {
         struct CompletePlugin;
         impl OmniShellPlugin for CompletePlugin {
             fn meta(&self) -> PluginMeta {
-                PluginMeta { name: "complete".to_string(), version: "0.1.0".to_string(), description: "test".to_string() }
+                PluginMeta {
+                    name: "complete".to_string(),
+                    version: "0.1.0".to_string(),
+                    description: "test".to_string(),
+                }
             }
             fn on_complete(&self, partial: &str, _ctx: &PluginContext) -> Vec<String> {
                 if partial.starts_with("ca") {
@@ -379,8 +407,7 @@ mod tests {
             }
         }
 
-        let builder = OmniShellBuilder::new(make_config())
-            .with_plugin(CompletePlugin);
+        let builder = OmniShellBuilder::new(make_config()).with_plugin(CompletePlugin);
 
         let profile = make_profile();
         let completions = builder.completions("ca", &profile, Path::new("/tmp"));

@@ -1,12 +1,34 @@
 //! OmniShell Lang implementation — full POSIX shell with pipes, compound commands,
 //! $(cmd) substitution, glob expansion, and break/continue.
 
-use shrs::prelude::{CmdOutput, LineContents, Shell, States};
 use shrs::lang::Lang;
-use shrs_job::{JobManager, run_external_command, Process, ProcessGroup, Output, Stdin as JobStdin};
-use shrs_lang::{Lexer, Parser, Token, ast};
+use shrs::prelude::{CmdOutput, LineContents, Shell, States};
+use shrs_job::{
+    run_external_command, JobManager, Output, Process, ProcessGroup, Stdin as JobStdin,
+};
+use shrs_lang::{ast, Lexer, Parser, Token};
 
-use super::{expand_arg, envsubst, EvalResult};
+use super::{envsubst, expand_arg, EvalResult};
+use crate::acl::{AclEngine, Verdict};
+
+/// Control flow signals for break/continue in loops.
+/// Returned as errors from eval_command to propagate out of loop bodies.
+#[derive(Debug)]
+enum ShellControl {
+    Break,
+    Continue,
+}
+
+impl std::fmt::Display for ShellControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShellControl::Break => write!(f, "break"),
+            ShellControl::Continue => write!(f, "continue"),
+        }
+    }
+}
+
+impl std::error::Error for ShellControl {}
 
 /// OmniShell's POSIX-compatible shell language evaluator.
 ///
@@ -45,8 +67,7 @@ impl Lang for OmniShellLang {
                 Ok(CmdOutput::from_status(result.exit_code))
             }
             Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("__omnishell_break__") || msg.contains("__omnishell_continue__") {
+                if e.is::<ShellControl>() {
                     return Ok(CmdOutput::success());
                 }
                 if let Some(cmd) = extract_simple_cmd_name(&parsed) {
@@ -93,9 +114,10 @@ impl Lang for OmniShellLang {
                 Token::WORD(w) => {
                     let chars: Vec<char> = w.chars().collect();
                     if (chars.first() == Some(&'\'') || chars.first() == Some(&'"'))
-                        && (chars.len() == 1 || chars.first() != chars.last()) {
-                            return true;
-                        }
+                        && (chars.len() == 1 || chars.first() != chars.last())
+                    {
+                        return true;
+                    }
                 }
                 _ => {}
             }
@@ -123,9 +145,11 @@ fn eval_command(
 ) -> anyhow::Result<EvalResult> {
     match cmd {
         // --- Simple command ---
-        ast::Command::Simple { assigns, args, redirects } => {
-            eval_simple(sh, states, job_mgr, rt, assigns, args, redirects)
-        }
+        ast::Command::Simple {
+            assigns,
+            args,
+            redirects,
+        } => eval_simple(sh, states, job_mgr, rt, assigns, args, redirects),
 
         // --- Pipeline ---
         ast::Command::Pipeline(a_cmd, b_cmd) => {
@@ -210,9 +234,14 @@ fn eval_command(
                 match body_result {
                     Ok(_) => {}
                     Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("__omnishell_break__") { break; }
-                        if msg.contains("__omnishell_continue__") { continue; }
+                        if e.is::<ShellControl>() {
+                            if let Some(sc) = e.downcast_ref::<ShellControl>() {
+                                match sc {
+                                    ShellControl::Break => break,
+                                    ShellControl::Continue => continue,
+                                }
+                            }
+                        }
                         return Err(e);
                     }
                 }
@@ -231,9 +260,14 @@ fn eval_command(
                 match body_result {
                     Ok(_) => {}
                     Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("__omnishell_break__") { break; }
-                        if msg.contains("__omnishell_continue__") { continue; }
+                        if e.is::<ShellControl>() {
+                            if let Some(sc) = e.downcast_ref::<ShellControl>() {
+                                match sc {
+                                    ShellControl::Break => break,
+                                    ShellControl::Continue => continue,
+                                }
+                            }
+                        }
                         return Err(e);
                     }
                 }
@@ -242,10 +276,14 @@ fn eval_command(
         }
 
         // --- For loop ---
-        ast::Command::For { name, wordlist, body } => {
+        ast::Command::For {
+            name,
+            wordlist,
+            body,
+        } => {
             let mut expanded = Vec::new();
             for word in wordlist {
-                let substed = envsubst(rt, word);
+                let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, word);
                 for part in expand_arg(&substed) {
                     expanded.push(part);
                 }
@@ -257,9 +295,14 @@ fn eval_command(
                 match body_result {
                     Ok(_) => {}
                     Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("__omnishell_break__") { break; }
-                        if msg.contains("__omnishell_continue__") { continue; }
+                        if e.is::<ShellControl>() {
+                            if let Some(sc) = e.downcast_ref::<ShellControl>() {
+                                match sc {
+                                    ShellControl::Break => break,
+                                    ShellControl::Continue => continue,
+                                }
+                            }
+                        }
                         return Err(e);
                     }
                 }
@@ -269,7 +312,7 @@ fn eval_command(
 
         // --- Case ---
         ast::Command::Case { word, arms } => {
-            let substed = envsubst(rt, word);
+            let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, word);
             for ast::CaseArm { pattern, body } in arms {
                 let matched = pattern.iter().any(|p| {
                     if p.contains('*') || p.contains('?') || p.contains('[') {
@@ -312,6 +355,7 @@ fn eval_command(
 fn process_redirects(
     redirects: &[ast::Redirect],
     rt: &shrs::prelude::Runtime,
+    mode: crate::profile::Mode,
 ) -> anyhow::Result<(JobStdin, Output, Output)> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
@@ -321,8 +365,19 @@ fn process_redirects(
     let mut stderr = Output::Inherit;
 
     for redirect in redirects {
-        let fd_n = redirect.n.unwrap_or(if matches!(redirect.mode, ast::RedirectMode::Read | ast::RedirectMode::ReadAppend | ast::RedirectMode::ReadDup) { 0 } else { 1 });
-        let filename = envsubst(rt, &redirect.file);
+        let fd_n = redirect.n.unwrap_or(
+            if matches!(
+                redirect.mode,
+                ast::RedirectMode::Read
+                    | ast::RedirectMode::ReadAppend
+                    | ast::RedirectMode::ReadDup
+            ) {
+                0
+            } else {
+                1
+            },
+        );
+        let filename = envsubst(rt, mode, &redirect.file);
 
         match redirect.mode {
             ast::RedirectMode::Read => {
@@ -422,7 +477,7 @@ fn eval_simple(
     // Handle assignment-only lines
     if args.is_empty() {
         for assign in assigns {
-            let val = envsubst(rt, &assign.val);
+            let val = envsubst(rt, states.get::<crate::lang::ShellMode>().0, &assign.val);
             let _ = rt.env.set(&assign.var, &val);
         }
         return Ok(EvalResult::default());
@@ -431,7 +486,7 @@ fn eval_simple(
     // Expand all args with envsubst + glob
     let mut expanded_args = Vec::new();
     for arg in args {
-        let substed = envsubst(rt, arg);
+        let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
         for part in expand_arg(&substed) {
             expanded_args.push(part);
         }
@@ -445,9 +500,9 @@ fn eval_simple(
 
     // ACL enforcement — check before execution
     {
-        let shell_mode = states.get::<crate::lang::ShellMode>();
-        let acl = crate::acl::AclEngine::new(shell_mode.0);
+        let acl = states.get::<AclEngine>();
         let full_cmd = expanded_args.join(" ");
+        let shell_mode = states.get::<crate::lang::ShellMode>();
         if let crate::acl::Verdict::Deny(reason) = acl.evaluate(&full_cmd) {
             eprintln!("{}", crate::output::format_error(&reason, shell_mode.0));
             return Ok(EvalResult { exit_code: 126 });
@@ -456,8 +511,8 @@ fn eval_simple(
 
     // Built-in keywords
     match cmd_name {
-        "break" => return Err(anyhow::anyhow!("__omnishell_break__")),
-        "continue" => return Err(anyhow::anyhow!("__omnishell_continue__")),
+        "break" => return Err(ShellControl::Break.into()),
+        "continue" => return Err(ShellControl::Continue.into()),
         "exit" => {
             let code: i32 = cmd_args.first().and_then(|s| s.parse().ok()).unwrap_or(0);
             std::process::exit(code);
@@ -475,7 +530,9 @@ fn eval_simple(
             } else {
                 cmd_args.to_vec()
             };
-            return Ok(EvalResult { exit_code: builtin_test(&args) });
+            return Ok(EvalResult {
+                exit_code: builtin_test(&args),
+            });
         }
         _ => {}
     }
@@ -498,28 +555,23 @@ fn eval_simple(
 
     // Apply env assignments
     for assign in assigns {
-        let val = envsubst(rt, &assign.val);
+        let val = envsubst(rt, states.get::<crate::lang::ShellMode>().0, &assign.val);
         let _ = rt.env.set(&assign.var, &val);
     }
 
     // Process redirects to determine stdin/stdout/stderr
-    let (stdin, stdout, stderr) = process_redirects(_redirects, rt)?;
+    let shell_mode = states.get::<crate::lang::ShellMode>();
+    let (stdin, stdout, stderr) = process_redirects(_redirects, rt, shell_mode.0)?;
 
     // Run as external command
-    let (proc, pgid) = run_external_command(
-        cmd_name,
-        &cmd_args,
-        stdin,
-        stdout,
-        stderr,
-        None,
-    ).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!("__notfound__")
-        } else {
-            anyhow::anyhow!("execution error: {e}")
-        }
-    })?;
+    let (proc, pgid) = run_external_command(cmd_name, &cmd_args, stdin, stdout, stderr, None)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!("__notfound__")
+            } else {
+                anyhow::anyhow!("execution error: {e}")
+            }
+        })?;
 
     let proc_group = ProcessGroup {
         id: pgid,
@@ -531,9 +583,7 @@ fn eval_simple(
         .put_job_in_foreground(Some(job_id), false)
         .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
 
-    let exit_code = status
-        .and_then(|s| s.code())
-        .unwrap_or(1);
+    let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
 
     rt.exit_status = exit_code;
     Ok(EvalResult { exit_code })
@@ -549,13 +599,17 @@ fn eval_pipeline(
     b_cmd: &ast::Command,
 ) -> anyhow::Result<EvalResult> {
     let (mut a_procs, _) = eval_to_procs_with_io(
-        sh, states, job_mgr, rt, a_cmd, None, Some(Output::CreatePipe)
+        sh,
+        states,
+        job_mgr,
+        rt,
+        a_cmd,
+        None,
+        Some(Output::CreatePipe),
     )?;
 
     let b_stdin = a_procs.last_mut().unwrap().stdout();
-    let (b_procs, b_pgid) = eval_to_procs_with_io(
-        sh, states, job_mgr, rt, b_cmd, b_stdin, None
-    )?;
+    let (b_procs, b_pgid) = eval_to_procs_with_io(sh, states, job_mgr, rt, b_cmd, b_stdin, None)?;
 
     a_procs.extend(b_procs);
 
@@ -600,9 +654,21 @@ fn eval_to_procs_with_io(
 ) -> ProcsResult {
     match cmd {
         ast::Command::Simple { args, .. } => {
+            // Build command string for ACL checking
+            let cmd_string = args.join(" ");
+
+            // Check ACL before spawning
+            let acl = states.get::<AclEngine>();
+            match acl.evaluate(&cmd_string) {
+                Verdict::Deny(_reason) => {
+                    return Ok((vec![], None));
+                }
+                Verdict::Allow => {}
+            }
+
             let mut expanded = Vec::new();
             for arg in args {
-                let substed = envsubst(rt, arg);
+                let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
                 for part in expand_arg(&substed) {
                     expanded.push(part);
                 }
@@ -630,12 +696,17 @@ fn eval_to_procs_with_io(
 
         ast::Command::Pipeline(a_cmd, b_cmd) => {
             let (mut a_procs, _) = eval_to_procs_with_io(
-                sh, states, job_mgr, rt, a_cmd, stdin, Some(Output::CreatePipe)
+                sh,
+                states,
+                job_mgr,
+                rt,
+                a_cmd,
+                stdin,
+                Some(Output::CreatePipe),
             )?;
             let b_stdin = a_procs.last_mut().unwrap().stdout();
-            let (b_procs, b_pgid) = eval_to_procs_with_io(
-                sh, states, job_mgr, rt, b_cmd, b_stdin, stdout
-            )?;
+            let (b_procs, b_pgid) =
+                eval_to_procs_with_io(sh, states, job_mgr, rt, b_cmd, b_stdin, stdout)?;
             a_procs.extend(b_procs);
             Ok((a_procs, b_pgid))
         }
@@ -676,7 +747,11 @@ fn run_job_bg(
 fn builtin_test(args: &[String]) -> i32 {
     let mut pos = 0;
     let result = eval_test(args, &mut pos);
-    if result { 0 } else { 1 }
+    if result {
+        0
+    } else {
+        1
+    }
 }
 
 fn eval_test(args: &[String], pos: &mut usize) -> bool {
@@ -801,7 +876,10 @@ fn eval_test_primary(args: &[String], pos: &mut usize) -> String {
             *pos += 1;
             let path = args.get(*pos).map(|s| s.as_str()).unwrap_or("");
             *pos += 1;
-            std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false).to_string()
+            std::fs::metadata(path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+                .to_string()
         }
         _ => {
             *pos += 1;

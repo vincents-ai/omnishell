@@ -77,10 +77,7 @@ pub struct AuditLogger {
 impl AuditLogger {
     /// Create a new audit logger for the given mode.
     pub fn new(mode: Mode, config: AuditConfig) -> Self {
-        let log_dir = config
-            .log_dir
-            .clone()
-            .unwrap_or_else(default_audit_dir);
+        let log_dir = config.log_dir.clone().unwrap_or_else(default_audit_dir);
 
         let filename = match mode {
             Mode::Kids => "audit_kids.jsonl",
@@ -127,7 +124,9 @@ impl AuditLogger {
             timestamp: now_secs(),
             exit_code: 0,
             acl_verdict: "allowed".to_string(),
-            working_dir: std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()),
+            working_dir: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string()),
             duration_ms: 0,
             snapshot_created: false,
             user: std::env::var("USER").ok(),

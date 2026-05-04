@@ -218,7 +218,10 @@ impl Sandbox {
 
         // Set up bind mounts for sandboxed paths
         for bind in &self.config.bind_mounts {
-            let target = self.config.root_dir.join(bind.source.strip_prefix("/").unwrap_or(&bind.source));
+            let target = self
+                .config
+                .root_dir
+                .join(bind.source.strip_prefix("/").unwrap_or(&bind.source));
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -244,7 +247,11 @@ impl Sandbox {
                 None::<&str>,
             ) {
                 // Bind mount may fail without CAP_SYS_ADMIN — log but don't fail
-                tracing::warn!("Sandbox bind mount {} -> {} failed: {e}", bind.source.display(), target.display());
+                tracing::warn!(
+                    "Sandbox bind mount {} -> {} failed: {e}",
+                    bind.source.display(),
+                    target.display()
+                );
             }
         }
 
@@ -287,7 +294,7 @@ impl Sandbox {
                 Err(e) => {
                     // Namespace creation may fail without privileges — degrade gracefully
                     tracing::warn!("Sandbox namespace unshare failed (need CAP_SYS_ADMIN?): {e}");
-                },
+                }
             }
         }
 

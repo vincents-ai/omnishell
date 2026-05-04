@@ -3,8 +3,8 @@
 //! Stores user-defined shell functions (from `fname() { body }` syntax).
 //! Accessed via shrs States system as a shared mutable resource.
 
-use std::collections::HashMap;
 use shrs_lang::ast;
+use std::collections::HashMap;
 
 /// A table of user-defined shell functions.
 #[derive(Default)]

@@ -125,7 +125,9 @@ impl OmniShellTool {
         }
 
         // Check builtins first
-        let tokens: Vec<String> = input.command.split_whitespace()
+        let tokens: Vec<String> = input
+            .command
+            .split_whitespace()
             .map(|s| s.to_string())
             .collect();
 
@@ -133,7 +135,9 @@ impl OmniShellTool {
             let cmd = &tokens[0];
             let args = &tokens[1..];
 
-            if let Some(result) = builtins::dispatch(cmd, args, self.mode, &mut acl) {
+            if let Some(result) =
+                builtins::dispatch(cmd, args, self.mode, &mut acl, None, None, None)
+            {
                 let (stdout, exit_code) = match result {
                     BuiltinResult::Success(msg) => (msg, 0),
                     BuiltinResult::Error(msg) => (msg, 1),
@@ -171,8 +175,8 @@ impl OmniShellTool {
 
     /// Execute from raw JSON string input.
     pub fn execute_json(&self, json_input: &str) -> Result<ShellToolOutput, String> {
-        let input: ShellToolInput = serde_json::from_str(json_input)
-            .map_err(|e| format!("Invalid input JSON: {e}"))?;
+        let input: ShellToolInput =
+            serde_json::from_str(json_input).map_err(|e| format!("Invalid input JSON: {e}"))?;
         Ok(self.execute(input))
     }
 }
@@ -325,13 +329,19 @@ impl EngramContext {
     pub fn new() -> Self {
         let cli_path = "engram".to_string();
         let available = Self::check_engram_available(&cli_path);
-        Self { cli_path, available }
+        Self {
+            cli_path,
+            available,
+        }
     }
 
     /// Create with a specific CLI path.
     pub fn with_path(cli_path: String) -> Self {
         let available = Self::check_engram_available(&cli_path);
-        Self { cli_path, available }
+        Self {
+            cli_path,
+            available,
+        }
     }
 
     /// Check if engram CLI is available.
@@ -364,7 +374,10 @@ impl EngramContext {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(format!("engram task show failed: {}", String::from_utf8_lossy(&output.stderr)))
+            Err(format!(
+                "engram task show failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 
@@ -382,7 +395,10 @@ impl EngramContext {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(format!("engram task list failed: {}", String::from_utf8_lossy(&output.stderr)))
+            Err(format!(
+                "engram task list failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 

@@ -7,18 +7,15 @@
 //! - JSON output envelope in agent mode
 //! - Mode switching effects
 
-use omnishell::{
-    AclEngine, Verdict,
-    load_config,
-    OmniShellConfig, Profile, Mode,
-    SnapshotEngine, SnapshotPhase,
-    UndoStack,
-};
 use omnishell::builtins::{self, BuiltinResult};
-use omnishell::output::{CommandOutput, format_output, format_error};
-use omnishell::llm_integration::system_prompt;
-use omnishell::sandbox::Sandbox;
 use omnishell::history::{History, HistoryConfig};
+use omnishell::llm_integration::system_prompt;
+use omnishell::output::{format_error, format_output, CommandOutput};
+use omnishell::sandbox::Sandbox;
+use omnishell::{
+    load_config, AclEngine, Mode, OmniShellConfig, Profile, SnapshotEngine, SnapshotPhase,
+    UndoStack, Verdict,
+};
 
 /// Test the full ACL → builtins → output pipeline for Kids mode.
 #[test]
@@ -77,19 +74,54 @@ fn test_builtin_dispatch_with_acl() {
     let mut acl = AclEngine::new(Mode::Kids);
 
     // AI command should work in kids mode
-    let result = builtins::dispatch("?", &["what is ls?".to_string()], Mode::Kids, &mut acl);
+    let result = builtins::dispatch(
+        "?",
+        &["what is ls?".to_string()],
+        Mode::Kids,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
     assert!(matches!(result, Some(BuiltinResult::Success(_))));
 
     // Mode switch
-    let result = builtins::dispatch("mode", &["agent".to_string()], Mode::Kids, &mut acl);
-    assert!(matches!(result, Some(BuiltinResult::SwitchMode(Mode::Agent))));
+    let result = builtins::dispatch(
+        "mode",
+        &["agent".to_string()],
+        Mode::Kids,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
+    assert!(matches!(
+        result,
+        Some(BuiltinResult::SwitchMode(Mode::Agent))
+    ));
 
     // Allow/block in admin mode
     let mut acl = AclEngine::new(Mode::Admin);
-    builtins::dispatch("allow", &["custom_cmd".to_string()], Mode::Admin, &mut acl);
+    builtins::dispatch(
+        "allow",
+        &["custom_cmd".to_string()],
+        Mode::Admin,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
     assert!(acl.allowlist.iter().any(|r| r.pattern == "custom_cmd"));
 
-    builtins::dispatch("block", &["evil_cmd".to_string()], Mode::Admin, &mut acl);
+    builtins::dispatch(
+        "block",
+        &["evil_cmd".to_string()],
+        Mode::Admin,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
     assert!(acl.blocklist.iter().any(|r| r.pattern == "evil_cmd"));
 }
 
@@ -155,20 +187,26 @@ fn test_profile_resolution_from_config() {
     let mut config = OmniShellConfig::default();
 
     // Add a kids profile
-    config.profile.insert("kids".to_string(), Profile {
-        mode: Mode::Kids,
-        username: Some("child".to_string()),
-        display_name: Some("Kids Mode".to_string()),
-        age: Some(7),
-        ..Default::default()
-    });
+    config.profile.insert(
+        "kids".to_string(),
+        Profile {
+            mode: Mode::Kids,
+            username: Some("child".to_string()),
+            display_name: Some("Kids Mode".to_string()),
+            age: Some(7),
+            ..Default::default()
+        },
+    );
 
     // Default is admin
     assert_eq!(config.profile["default"].mode, Mode::Admin);
 
     // Switch default
     config.default_profile = Some("kids".to_string());
-    assert_eq!(config.profile[config.default_profile.as_ref().unwrap()].mode, Mode::Kids);
+    assert_eq!(
+        config.profile[config.default_profile.as_ref().unwrap()].mode,
+        Mode::Kids
+    );
 }
 
 /// Test config loading from TOML file with profile resolution.
@@ -176,7 +214,9 @@ fn test_profile_resolution_from_config() {
 fn test_config_load_and_resolve() {
     let dir = tempfile::tempdir().unwrap();
     let toml_path = dir.path().join("config.toml");
-    std::fs::write(&toml_path, r#"
+    std::fs::write(
+        &toml_path,
+        r#"
 default_profile = "kids"
 
 [profile.kids]
@@ -188,7 +228,9 @@ mode = "agent"
 
 [profile.admin]
 mode = "admin"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let config = load_config(Some(&toml_path)).unwrap();
     assert_eq!(config.default_profile, Some("kids".to_string()));
@@ -203,25 +245,31 @@ fn test_llm_prompt_matches_output_mode() {
     // Kids: tutor prompt + emoji output
     let kids_prompt = system_prompt(Mode::Kids);
     assert!(kids_prompt.contains("OmniTutor"));
-    let kids_output = format_output(&CommandOutput {
-        command: "ls".to_string(),
-        stdout: "file.txt".to_string(),
-        stderr: String::new(),
-        exit_code: 0,
-        duration_ms: 10,
-    }, Mode::Kids);
+    let kids_output = format_output(
+        &CommandOutput {
+            command: "ls".to_string(),
+            stdout: "file.txt".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms: 10,
+        },
+        Mode::Kids,
+    );
     assert!(kids_output.contains("✅"));
 
     // Agent: JSON prompt + JSON output
     let agent_prompt = system_prompt(Mode::Agent);
     assert!(agent_prompt.contains("JSON"));
-    let agent_output = format_output(&CommandOutput {
-        command: "ls".to_string(),
-        stdout: "file.txt".to_string(),
-        stderr: String::new(),
-        exit_code: 0,
-        duration_ms: 10,
-    }, Mode::Agent);
+    let agent_output = format_output(
+        &CommandOutput {
+            command: "ls".to_string(),
+            stdout: "file.txt".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms: 10,
+        },
+        Mode::Agent,
+    );
     let parsed: serde_json::Value = serde_json::from_str(&agent_output).unwrap();
     assert_eq!(parsed["type"], "success");
 }
@@ -248,10 +296,13 @@ fn test_sandbox_acl_interaction() {
 /// Test history + audit lifecycle.
 #[test]
 fn test_history_audit_lifecycle() {
-    let mut history = History::new(Mode::Agent, HistoryConfig {
-        persistent: false,
-        ..Default::default()
-    });
+    let mut history = History::new(
+        Mode::Agent,
+        HistoryConfig {
+            persistent: false,
+            ..Default::default()
+        },
+    );
 
     // Simulate command execution
     let commands = ["cargo build", "cargo test", "cargo clippy"];
@@ -276,11 +327,27 @@ fn test_runtime_acl_modification() {
     let mut acl = AclEngine::new(Mode::Admin);
 
     // Block a command
-    builtins::dispatch("block", &["danger".to_string()], Mode::Admin, &mut acl);
+    builtins::dispatch(
+        "block",
+        &["danger".to_string()],
+        Mode::Admin,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
     assert!(matches!(acl.evaluate("danger"), Verdict::Deny(_)));
 
     // Allow it back
-    builtins::dispatch("allow", &["danger".to_string()], Mode::Admin, &mut acl);
+    builtins::dispatch(
+        "allow",
+        &["danger".to_string()],
+        Mode::Admin,
+        &mut acl,
+        None,
+        None,
+        None,
+    );
 
     // Blocklist still has it, so it's still blocked
     // (blocklist overrides allowlist)
@@ -330,8 +397,8 @@ fn test_full_mode_switch() {
 // to ensure end-to-end correctness.
 
 fn omnishell_cmd(cmd: &str, mode: &str) -> std::process::Output {
-    let omnishell_path = std::env::var("OMNISHELL_BIN")
-        .unwrap_or_else(|_| "./target/debug/omnishell".to_string());
+    let omnishell_path =
+        std::env::var("OMNISHELL_BIN").unwrap_or_else(|_| "./target/debug/omnishell".to_string());
     std::process::Command::new(&omnishell_path)
         .args(["--mode", mode, "-c", cmd])
         .output()
@@ -422,7 +489,10 @@ fn test_scripting_while_break() {
 
 #[test]
 fn test_scripting_case_esac() {
-    let out = omnishell_cmd("case hello in hi) echo HI ;; hello) echo HELLO ;; esac", "admin");
+    let out = omnishell_cmd(
+        "case hello in hi) echo HI ;; hello) echo HELLO ;; esac",
+        "admin",
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("HELLO"));
     assert!(!stdout.contains("HI"));
@@ -431,7 +501,10 @@ fn test_scripting_case_esac() {
 
 #[test]
 fn test_scripting_case_glob() {
-    let out = omnishell_cmd("case test.txt in *.txt) echo TEXT ;; *) echo OTHER ;; esac", "admin");
+    let out = omnishell_cmd(
+        "case test.txt in *.txt) echo TEXT ;; *) echo OTHER ;; esac",
+        "admin",
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("TEXT"));
     assert!(out.status.success());

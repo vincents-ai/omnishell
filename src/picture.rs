@@ -64,6 +64,10 @@ impl ProfilePicture {
 
     /// Render the picture to the terminal using viuer.
     /// Returns true if rendering succeeded.
+    /// Render the picture to the terminal using viuer.
+    /// Returns true if rendering succeeded.
+    /// Requires the "pictures" feature flag.
+    #[cfg(feature = "pictures")]
     pub fn render(&self) -> bool {
         if !self.exists() {
             return false;
@@ -76,12 +80,26 @@ impl ProfilePicture {
         };
 
         let config = viuer::Config {
-            width: if self.width > 0 { Some(self.width) } else { None },
-            height: if self.height > 0 { Some(self.height) } else { None },
+            width: if self.width > 0 {
+                Some(self.width)
+            } else {
+                None
+            },
+            height: if self.height > 0 {
+                Some(self.height)
+            } else {
+                None
+            },
             ..Default::default()
         };
 
         viuer::print(&img, &config).is_ok()
+    }
+
+    /// Render not available without "pictures" feature.
+    #[cfg(not(feature = "pictures"))]
+    pub fn render(&self) -> bool {
+        false
     }
 
     /// Get a fallback emoji for modes without a picture.

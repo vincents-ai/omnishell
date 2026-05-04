@@ -36,12 +36,76 @@ pub enum SnapshotPhase {
     PostExecution,
 }
 
+/// Where snapshot commits are stored.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub enum SnapshotTarget {
+    /// Commit to a dedicated ref (refs/heads/omnishell-snapshots).
+    #[default]
+    DedicatedRef,
+    /// Commit to the current branch.
+    CurrentBranch,
+    /// Create a detached branch per snapshot.
+    Detached,
+}
+
+/// Retention policy for snapshots.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub enum SnapshotRetention {
+    /// Keep all snapshots forever.
+    #[default]
+    Unlimited,
+    /// Keep only the last N snapshots.
+    Count(usize),
+    /// Keep snapshots newer than the given duration (in seconds).
+    TimeBased(u64),
+}
+
+/// When to trigger a post-execution snapshot.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub enum SnapshotTrigger {
+    /// Always snapshot after mutating commands.
+    #[default]
+    Always,
+    /// Only snapshot if working tree actually changed.
+    OnTreeChange,
+}
+
+/// Configuration for snapshot behavior.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct SnapshotConfig {
+    /// Where to store snapshot commits.
+    pub target: SnapshotTarget,
+    /// Retention policy.
+    pub retention: SnapshotRetention,
+    /// When to trigger post-execution snapshots.
+    pub trigger: SnapshotTrigger,
+    /// Ref name for dedicated target mode.
+    pub ref_name: String,
+}
+
+impl SnapshotConfig {
+    /// Create default config with a custom ref name.
+    pub fn new() -> Self {
+        Self {
+            ref_name: "refs/heads/omnishell-snapshots".to_string(),
+            ..Default::default()
+        }
+    }
+}
+
 /// The snapshot engine. Manages git-based snapshots of the working directory.
 pub struct SnapshotEngine {
     /// The gix repository handle (None if not in a git repo).
     repo: Option<gix::Repository>,
     /// In-memory history of snapshots (for undo stack).
     history: Vec<Snapshot>,
+    /// Snapshot configuration.
+    #[allow(dead_code)]
+    config: SnapshotConfig,
 }
 
 impl SnapshotEngine {
@@ -54,6 +118,7 @@ impl SnapshotEngine {
         Self {
             repo,
             history: Vec::new(),
+            config: SnapshotConfig::new(),
         }
     }
 
@@ -65,16 +130,33 @@ impl SnapshotEngine {
     /// Check if a command should trigger a snapshot.
     pub fn is_mutating_command(command: &str) -> bool {
         let mutating_prefixes = [
-            "rm", "mv", "cp", "mkdir", "touch", "chmod", "chown",
-            "cargo", "pip", "npm", "yarn", "go", "make",
-            "git push", "git commit", "git merge", "git rebase", "git reset",
-            "dd", "truncate", "shred",
+            "rm",
+            "mv",
+            "cp",
+            "mkdir",
+            "touch",
+            "chmod",
+            "chown",
+            "cargo",
+            "pip",
+            "npm",
+            "yarn",
+            "go",
+            "make",
+            "git push",
+            "git commit",
+            "git merge",
+            "git rebase",
+            "git reset",
+            "dd",
+            "truncate",
+            "shred",
         ];
 
         let cmd_lower = command.trim().to_lowercase();
-        mutating_prefixes.iter().any(|prefix| {
-            cmd_lower == *prefix || cmd_lower.starts_with(&format!("{prefix} "))
-        })
+        mutating_prefixes
+            .iter()
+            .any(|prefix| cmd_lower == *prefix || cmd_lower.starts_with(&format!("{prefix} ")))
     }
 
     /// Create a pre-execution snapshot.
@@ -99,9 +181,8 @@ impl SnapshotEngine {
     pub fn post_execution_snapshot(&mut self, command: &str, exit_code: i32) -> Result<Snapshot> {
         let timestamp = now_secs();
 
-        let commit_id = self.try_create_commit(&format!(
-            "omnishell: POST | {command} | exit={exit_code}"
-        ));
+        let commit_id =
+            self.try_create_commit(&format!("omnishell: POST | {command} | exit={exit_code}"));
 
         let snapshot = Snapshot {
             commit_id,

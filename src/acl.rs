@@ -87,7 +87,9 @@ impl AclEngine {
                 }
                 // Check argument-level constraints
                 for constraint in &rule.args {
-                    if let Some(deny) = check_arg_constraint(args, constraint, cmd_name, &rule.reason) {
+                    if let Some(deny) =
+                        check_arg_constraint(args, constraint, cmd_name, &rule.reason)
+                    {
                         return deny;
                     }
                 }
@@ -106,7 +108,8 @@ impl AclEngine {
                     // Check that no argument constraint is violated
                     let mut all_args_ok = true;
                     for constraint in &rule.args {
-                        if check_arg_constraint(args, constraint, cmd_name, &rule.reason).is_some() {
+                        if check_arg_constraint(args, constraint, cmd_name, &rule.reason).is_some()
+                        {
                             all_args_ok = false;
                             break;
                         }
@@ -159,13 +162,13 @@ impl AclEngine {
                 pattern_rule("git", "diff", "View git diff"),
                 pattern_rule("git", "branch", "List git branches"),
             ],
-            blocklist: vec![
-                AclRule {
-                    pattern: "*".to_string(),
-                    args: vec![ArgConstraint::MustNotContain("--no-preserve-root".to_string())],
-                    reason: "Destructive flag blocked".to_string(),
-                },
-            ],
+            blocklist: vec![AclRule {
+                pattern: "*".to_string(),
+                args: vec![ArgConstraint::MustNotContain(
+                    "--no-preserve-root".to_string(),
+                )],
+                reason: "Destructive flag blocked".to_string(),
+            }],
         }
     }
 
@@ -182,7 +185,9 @@ impl AclEngine {
                 },
                 AclRule {
                     pattern: "rm".to_string(),
-                    args: vec![ArgConstraint::MustNotContain("--no-preserve-root".to_string())],
+                    args: vec![ArgConstraint::MustNotContain(
+                        "--no-preserve-root".to_string(),
+                    )],
                     reason: "Root filesystem deletion blocked".to_string(),
                 },
                 AclRule {
@@ -326,6 +331,85 @@ impl fmt::Display for Mode {
     }
 }
 
+/// Schema for a command's dangerous flags and argument patterns.
+/// Provides argument-level validation beyond simple pattern matching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSchema {
+    /// The command name this schema describes.
+    pub command: String,
+    /// Flags that are always dangerous (e.g. "--force", "-rf").
+    pub dangerous_flags: Vec<String>,
+    /// Argument patterns that are dangerous (glob patterns).
+    pub dangerous_args: Vec<String>,
+    /// A human-readable reason for why this command is dangerous.
+    pub reason: String,
+}
+
+/// Return the default built-in command schemas for common dangerous commands.
+pub fn default_schemas() -> Vec<CommandSchema> {
+    vec![
+        CommandSchema {
+            command: "rm".to_string(),
+            dangerous_flags: vec![
+                "-rf".to_string(),
+                "-r".to_string(),
+                "--force".to_string(),
+                "--no-preserve-root".to_string(),
+            ],
+            dangerous_args: vec!["/*".to_string(), "/".to_string()],
+            reason: "Recursive/forced file deletion".to_string(),
+        },
+        CommandSchema {
+            command: "mv".to_string(),
+            dangerous_flags: vec!["--force".to_string()],
+            dangerous_args: vec![],
+            reason: "Force file move/overwrite".to_string(),
+        },
+        CommandSchema {
+            command: "cp".to_string(),
+            dangerous_flags: vec!["--force".to_string(), "-r".to_string()],
+            dangerous_args: vec![],
+            reason: "Force recursive copy".to_string(),
+        },
+        CommandSchema {
+            command: "chmod".to_string(),
+            dangerous_flags: vec!["-R".to_string(), "--recursive".to_string()],
+            dangerous_args: vec!["/*".to_string(), "/".to_string()],
+            reason: "Recursive permission change on root".to_string(),
+        },
+        CommandSchema {
+            command: "chown".to_string(),
+            dangerous_flags: vec!["-R".to_string(), "--recursive".to_string()],
+            dangerous_args: vec!["/*".to_string(), "/".to_string()],
+            reason: "Recursive ownership change on root".to_string(),
+        },
+        CommandSchema {
+            command: "dd".to_string(),
+            dangerous_flags: vec![],
+            dangerous_args: vec!["/dev/sd*".to_string(), "/dev/nvme*".to_string()],
+            reason: "Direct disk write operations".to_string(),
+        },
+        CommandSchema {
+            command: "git".to_string(),
+            dangerous_flags: vec!["--force".to_string()],
+            dangerous_args: vec![],
+            reason: "Force git operations".to_string(),
+        },
+        CommandSchema {
+            command: "sudo".to_string(),
+            dangerous_flags: vec![],
+            dangerous_args: vec![],
+            reason: "Elevated privilege execution".to_string(),
+        },
+        CommandSchema {
+            command: "mkfs".to_string(),
+            dangerous_flags: vec![],
+            dangerous_args: vec!["/dev/sd*".to_string(), "/dev/nvme*".to_string()],
+            reason: "Filesystem formatting".to_string(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +490,10 @@ mod tests {
     fn test_agent_blocks_recursive_root_deletion() {
         let acl = AclEngine::new(Mode::Agent);
         assert!(matches!(acl.evaluate("rm -rf /"), Verdict::Deny(_)));
-        assert!(matches!(acl.evaluate("rm --no-preserve-root -rf /"), Verdict::Deny(_)));
+        assert!(matches!(
+            acl.evaluate("rm --no-preserve-root -rf /"),
+            Verdict::Deny(_)
+        ));
     }
 
     #[test]

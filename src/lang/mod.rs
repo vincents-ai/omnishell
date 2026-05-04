@@ -5,21 +5,22 @@
 //!
 //! Also adds: $(cmd) substitution, glob expansion in for/case, break/continue.
 
-
-mod lang_impl;
 mod functions;
+mod lang_impl;
 mod shell_mode;
 
-pub use lang_impl::OmniShellLang;
 pub use functions::FunctionTable;
+pub use lang_impl::OmniShellLang;
 pub use shell_mode::ShellMode;
+
+use lazy_static::lazy_static;
+use regex::Regex;
 
 /// Result of evaluating a command.
 #[derive(Default)]
 struct EvalResult {
     exit_code: i32,
 }
-
 
 /// Expand arguments with glob support.
 fn expand_arg(arg: &str) -> Vec<String> {
@@ -61,19 +62,16 @@ fn expand_arg(arg: &str) -> Vec<String> {
     vec![a]
 }
 
+lazy_static! {
+    static ref R_ARITH: Regex = Regex::new(r#"\$\(\(([^)]+)\)\)"#).unwrap();
+    static ref R_DOLLAR_VAR: Regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+    static ref R_DOLLAR_BRACE: Regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+    static ref R_CMD_SUB: Regex = Regex::new(r"\$\(([^)]+)\)").unwrap();
+}
+
 /// Perform environment variable substitution.
 /// Handles $VAR, ${VAR}, ~, and $(command).
-fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
-    use regex::Regex;
-    use lazy_static::lazy_static;
-
-    lazy_static! {
-        static ref R_ARITH: Regex = Regex::new(r#"\$\(\(([^)]+)\)\)"#).unwrap();
-        static ref R_DOLLAR_VAR: Regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
-        static ref R_DOLLAR_BRACE: Regex = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-        static ref R_CMD_SUB: Regex = Regex::new(r"\$\(([^)]+)\)").unwrap();
-    }
-
+fn envsubst(rt: &shrs::prelude::Runtime, acl_mode: crate::profile::Mode, arg: &str) -> String {
     let mut result = arg.to_string();
 
     // Arithmetic expansion: $((expr))
@@ -86,6 +84,8 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
 
     // Command substitution: $(command)
     // Execute directly via fork+exec — no sh -c.
+    // ACL check: evaluate command against ACL before spawning.
+    let acl = crate::acl::AclEngine::new(acl_mode);
     for cap in R_CMD_SUB.captures_iter(arg) {
         let full = cap.get(0).unwrap().as_str();
         let cmd = &cap[1];
@@ -93,12 +93,18 @@ fn envsubst(rt: &shrs::prelude::Runtime, arg: &str) -> String {
         let value = if tokens.is_empty() {
             String::new()
         } else {
-            match std::process::Command::new(tokens[0])
-                .args(&tokens[1..])
-                .output()
-            {
-                Ok(o) => String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
-                Err(_) => String::new(),
+            // ACL gate: check the command before executing
+            match acl.evaluate(cmd) {
+                crate::acl::Verdict::Deny(_) => String::new(),
+                crate::acl::Verdict::Allow => {
+                    match std::process::Command::new(tokens[0])
+                        .args(&tokens[1..])
+                        .output()
+                    {
+                        Ok(o) => String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
+                        Err(_) => String::new(),
+                    }
+                }
             }
         };
         result = result.replace(full, &value);
@@ -148,8 +154,14 @@ fn eval_arithmetic(expr: &str) -> i64 {
         while *pos < chars.len() {
             skip_whitespace(chars, pos);
             match chars.get(*pos) {
-                Some('+') => { *pos += 1; result += parse_term(chars, pos); }
-                Some('-') => { *pos += 1; result -= parse_term(chars, pos); }
+                Some('+') => {
+                    *pos += 1;
+                    result += parse_term(chars, pos);
+                }
+                Some('-') => {
+                    *pos += 1;
+                    result -= parse_term(chars, pos);
+                }
                 _ => break,
             }
         }
@@ -161,9 +173,28 @@ fn eval_arithmetic(expr: &str) -> i64 {
         while *pos < chars.len() {
             skip_whitespace(chars, pos);
             match chars.get(*pos) {
-                Some('*') => { *pos += 1; result *= parse_factor(chars, pos); }
-                Some('/') => { *pos += 1; let d = parse_factor(chars, pos); if d != 0 { result /= d; } else { result = 0; } }
-                Some('%') => { *pos += 1; let d = parse_factor(chars, pos); if d != 0 { result %= d; } else { result = 0; } }
+                Some('*') => {
+                    *pos += 1;
+                    result *= parse_factor(chars, pos);
+                }
+                Some('/') => {
+                    *pos += 1;
+                    let d = parse_factor(chars, pos);
+                    if d != 0 {
+                        result /= d;
+                    } else {
+                        result = 0;
+                    }
+                }
+                Some('%') => {
+                    *pos += 1;
+                    let d = parse_factor(chars, pos);
+                    if d != 0 {
+                        result %= d;
+                    } else {
+                        result = 0;
+                    }
+                }
                 _ => break,
             }
         }
@@ -175,7 +206,9 @@ fn eval_arithmetic(expr: &str) -> i64 {
         if *pos < chars.len() && chars[*pos] == '(' {
             *pos += 1; // skip (
             let result = parse_expr(chars, pos);
-            if *pos < chars.len() && chars[*pos] == ')' { *pos += 1; }
+            if *pos < chars.len() && chars[*pos] == ')' {
+                *pos += 1;
+            }
             return result;
         }
         // Unary minus
@@ -188,9 +221,11 @@ fn eval_arithmetic(expr: &str) -> i64 {
         while *pos < chars.len() && (chars[*pos].is_ascii_digit()) {
             *pos += 1;
         }
-        if start == *pos { return 0; }
+        if start == *pos {
+            return 0;
+        }
         let num_str: String = chars[start..*pos].iter().collect();
-        num_str.parse().unwrap_or(0)
+        num_str.parse::<i64>().unwrap_or(0).saturating_sub(0)
     }
 
     fn skip_whitespace(chars: &[char], pos: &mut usize) {

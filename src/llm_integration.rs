@@ -8,8 +8,6 @@
 
 use std::sync::OnceLock;
 
-use serde::{Deserialize, Serialize};
-
 use crate::profile::Mode;
 
 /// Global tokio runtime for async LLM operations.
@@ -26,44 +24,8 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// LLM configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    /// Whether LLM features are enabled.
-    pub enabled: bool,
-    /// Model to use (provider-specific).
-    #[serde(default = "default_model")]
-    pub model: String,
-    /// Temperature for generation (0.0 - 2.0).
-    #[serde(default = "default_temperature")]
-    pub temperature: f32,
-    /// Maximum tokens to generate.
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
-}
-
-fn default_model() -> String {
-    "default".to_string()
-}
-
-fn default_temperature() -> f32 {
-    0.7
-}
-
-fn default_max_tokens() -> u32 {
-    1024
-}
-
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            model: default_model(),
-            temperature: default_temperature(),
-            max_tokens: default_max_tokens(),
-        }
-    }
-}
+/// Re-export LlmConfig from profile module as the canonical type.
+pub use crate::profile::LlmConfig;
 
 /// LLM response.
 #[derive(Debug, Clone)]
@@ -78,7 +40,16 @@ pub enum LlmResponse {
 
 /// System prompt for the given mode.
 pub fn system_prompt(mode: Mode) -> String {
-    match mode {
+    system_prompt_with_override(mode, None, None)
+}
+
+/// Build system prompt with optional profile overrides.
+pub fn system_prompt_with_override(
+    mode: Mode,
+    prompt_mode: Option<crate::profile::SystemPromptMode>,
+    prompt_extra: Option<&str>,
+) -> String {
+    let default = match mode {
         Mode::Kids => {
             "You are OmniTutor, a friendly and encouraging AI assistant for children aged 5-9 \
              who are learning to use the terminal. \
@@ -103,6 +74,15 @@ pub fn system_prompt(mode: Mode) -> String {
         Mode::Admin => {
             "You are an AI assistant for an experienced system administrator. \
              \nBe concise and technical. Assume expertise.".to_string()
+        }
+    };
+
+    match prompt_mode.unwrap_or_default() {
+        crate::profile::SystemPromptMode::Default => default,
+        crate::profile::SystemPromptMode::Override => prompt_extra.unwrap_or(&default).to_string(),
+        crate::profile::SystemPromptMode::Append => {
+            let extra = prompt_extra.unwrap_or("");
+            format!("{default}\n\n{extra}")
         }
     }
 }
@@ -135,7 +115,10 @@ impl LlmClient {
         let system = system_prompt(self.mode);
 
         // Build the vincents-llm request
-        use vincents_llm::{ProviderManager, provider_manager::ProviderManagerConfig, ChatCompletionRequest, ChatMessage};
+        use vincents_llm::{
+            provider_manager::ProviderManagerConfig, ChatCompletionRequest, ChatMessage,
+            ProviderManager,
+        };
 
         let pm_config = ProviderManagerConfig {
             default_provider: self.config.model.clone(),
@@ -155,8 +138,14 @@ impl LlmClient {
         let request = ChatCompletionRequest {
             model: self.config.model.clone(),
             messages: vec![
-                ChatMessage::System { content: system, name: None },
-                ChatMessage::User { content: prompt.to_string(), name: None },
+                ChatMessage::System {
+                    content: system,
+                    name: None,
+                },
+                ChatMessage::User {
+                    content: prompt.to_string(),
+                    name: None,
+                },
             ],
             temperature: Some(self.config.temperature as f64),
             max_tokens: Some(self.config.max_tokens),
@@ -165,14 +154,16 @@ impl LlmClient {
 
         match provider.chat_completion(request).await {
             Ok(response) => {
-                let content = response.choices.first()
+                let content = response
+                    .choices
+                    .first()
                     .and_then(|c| match &c.message {
                         ChatMessage::Assistant { content, .. } => content.clone(),
                         _ => None,
                     })
                     .unwrap_or_default();
                 LlmResponse::Success(content)
-            },
+            }
             Err(e) => LlmResponse::Error(format!("LLM error: {e}")),
         }
     }
