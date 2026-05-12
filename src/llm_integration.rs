@@ -121,7 +121,7 @@ impl LlmClient {
         };
 
         let pm_config = ProviderManagerConfig {
-            default_provider: self.config.model.clone(),
+            default_provider: self.config.provider.clone(),
             ..Default::default()
         };
         let manager = ProviderManager::new(pm_config);
@@ -130,7 +130,10 @@ impl LlmClient {
             None => {
                 // No provider configured — graceful degradation
                 return LlmResponse::Error(
-                    "No LLM provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or run Ollama locally.".to_string()
+                    format!(
+                        "No LLM provider configured for '{}'. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or run Ollama locally.",
+                        self.config.provider
+                    )
                 );
             }
         };
@@ -169,8 +172,89 @@ impl LlmClient {
     }
 
     /// Send a query synchronously (blocks on the global runtime).
+    /// Send a prompt to the LLM with engram task context.
+    ///
+    /// Appends the current engram task context (next task, recent tasks)
+    /// to the system prompt so the LLM is aware of what the agent is working on.
+    pub async fn query_with_context(
+        &self,
+        prompt: &str,
+        engram_context: &str,
+    ) -> LlmResponse {
+        if !self.config.enabled {
+            return LlmResponse::Disabled(
+                "LLM is disabled. Use --no-llm to suppress this message.".to_string(),
+            );
+        }
+
+        let mut system = system_prompt(self.mode);
+        if !engram_context.is_empty() && !engram_context.contains("no engram context available") {
+            system.push_str("\n\n## Current Task Context\n");
+            system.push_str(engram_context);
+        }
+
+        use vincents_llm::{
+            provider_manager::ProviderManagerConfig, ChatCompletionRequest, ChatMessage,
+            ProviderManager,
+        };
+
+        let pm_config = ProviderManagerConfig {
+            default_provider: self.config.provider.clone(),
+            ..Default::default()
+        };
+        let manager = ProviderManager::new(pm_config);
+        let provider = match manager.get_default_provider() {
+            Some(p) => p,
+            None => {
+                return LlmResponse::Error(
+                    format!(
+                        "No LLM provider configured for '{}'.",
+                        self.config.provider
+                    )
+                );
+            }
+        };
+
+        let request = ChatCompletionRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                ChatMessage::System {
+                    content: system,
+                    name: None,
+                },
+                ChatMessage::User {
+                    content: prompt.to_string(),
+                    name: None,
+                },
+            ],
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens),
+            ..Default::default()
+        };
+
+        match provider.chat_completion(request).await {
+            Ok(response) => {
+                let content = response
+                    .choices
+                    .first()
+                    .and_then(|c| match &c.message {
+                        ChatMessage::Assistant { content, .. } => content.clone(),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                LlmResponse::Success(content)
+            }
+            Err(e) => LlmResponse::Error(format!("LLM error: {e}")),
+        }
+    }
+
     pub fn query_sync(&self, prompt: &str) -> LlmResponse {
         runtime().block_on(self.query(prompt))
+    }
+
+    /// Send a prompt synchronously with engram context.
+    pub fn query_sync_with_context(&self, prompt: &str, engram_context: &str) -> LlmResponse {
+        runtime().block_on(self.query_with_context(prompt, engram_context))
     }
 }
 

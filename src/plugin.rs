@@ -9,7 +9,7 @@
 //! Plugins are registered via OmniShellBuilder and initialized in order.
 
 use std::any::Any;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::profile::Profile;
 use crate::OmniShellConfig;
@@ -244,6 +244,106 @@ pub struct AuditPlugin {
     pub log: std::sync::Mutex<Vec<String>>,
 }
 
+/// A plugin that enforces sandbox path boundaries for `cd` in Kids mode.
+/// Prevents `cd /`, `cd ../../etc`, and other escapes from the sandbox.
+pub struct SandboxCdPlugin {
+    /// Allowed root paths (home dir, /tmp, sandbox dir).
+    pub allowed_roots: Vec<std::path::PathBuf>,
+    /// The mode to enforce (only Kids mode applies restrictions).
+    pub mode: crate::profile::Mode,
+}
+
+impl SandboxCdPlugin {
+    /// Create a new sandbox cd plugin for Kids mode.
+    pub fn kids(home_dir: &Path) -> Self {
+        let sandbox_root = home_dir.join(".omnishell/sandbox");
+        Self {
+            allowed_roots: vec![
+                home_dir.to_path_buf(),
+                sandbox_root,
+                PathBuf::from("/tmp"),
+            ],
+            mode: crate::profile::Mode::Kids,
+        }
+    }
+
+    /// Check if a path resolves to a location within allowed roots.
+    fn is_path_within_allowed(&self, target: &Path, cwd: &Path) -> bool {
+        // Resolve the target relative to cwd
+        let resolved = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            cwd.join(target)
+        };
+
+        // Canonicalize won't work on non-existent paths, so normalize manually
+        let normalized = Self::normalize_path(&resolved);
+
+        self.allowed_roots
+            .iter()
+            .any(|root| normalized.starts_with(root))
+    }
+
+    /// Normalize a path by resolving `.` and `..` components without
+    /// requiring the path to exist on disk.
+    fn normalize_path(path: &Path) -> PathBuf {
+        let mut components = Vec::new();
+        for comp in path.components() {
+            match comp {
+                std::path::Component::CurDir => { /* skip */ }
+                std::path::Component::ParentDir => {
+                    if !components.is_empty() {
+                        components.pop();
+                    }
+                    // If we pop past root, the path tries to escape — keep it
+                    // so the starts_with check will fail
+                }
+                comp => components.push(comp),
+            }
+        }
+        components.iter().collect()
+    }
+}
+
+impl OmniShellPlugin for SandboxCdPlugin {
+    fn meta(&self) -> PluginMeta {
+        PluginMeta {
+            name: "sandbox-cd".to_string(),
+            version: "0.1.0".to_string(),
+            description: "Enforces sandbox path boundaries for cd in Kids mode".to_string(),
+        }
+    }
+
+    fn on_before_command(&self, command: &str, ctx: &PluginContext) -> PluginCommandAction {
+        if self.mode != crate::profile::Mode::Kids {
+            return PluginCommandAction::Allow;
+        }
+
+        // Check if this is a cd command
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        if tokens.is_empty() || tokens[0] != "cd" {
+            return PluginCommandAction::Allow;
+        }
+
+        // cd with no args → go home, which is fine
+        if tokens.len() == 1 {
+            return PluginCommandAction::Allow;
+        }
+
+        let target = tokens[1];
+        let target_path = Path::new(target);
+
+        if !self.is_path_within_allowed(target_path, ctx.working_dir) {
+            return PluginCommandAction::Deny(format!(
+                "cd: cannot go to '{}' — outside sandbox in Kids mode",
+                target
+            ));
+        }
+
+        PluginCommandAction::Allow
+    }
+}
+
 impl Default for AuditPlugin {
     fn default() -> Self {
         Self::new()
@@ -427,5 +527,97 @@ mod tests {
         assert!(json.contains("\"name\":\"test\""));
         let parsed: PluginMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "test");
+    }
+
+    #[test]
+    fn test_sandbox_cd_blocks_root() {
+        let plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test/projects"),
+        };
+        // cd / → blocked
+        let action = plugin.on_before_command("cd /", &ctx);
+        assert!(matches!(action, PluginCommandAction::Deny(_)));
+    }
+
+    #[test]
+    fn test_sandbox_cd_blocks_escape() {
+        let plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test/projects"),
+        };
+        // cd ../../etc → resolves to /etc → blocked
+        let action = plugin.on_before_command("cd ../../etc", &ctx);
+        assert!(matches!(action, PluginCommandAction::Deny(_)));
+    }
+
+    #[test]
+    fn test_sandbox_cd_allows_home_subdir() {
+        let plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test/projects"),
+        };
+        // cd /home/test/docs → allowed
+        let action = plugin.on_before_command("cd /home/test/docs", &ctx);
+        assert_eq!(action, PluginCommandAction::Allow);
+    }
+
+    #[test]
+    fn test_sandbox_cd_allows_tmp() {
+        let plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test"),
+        };
+        // cd /tmp → allowed
+        let action = plugin.on_before_command("cd /tmp", &ctx);
+        assert_eq!(action, PluginCommandAction::Allow);
+    }
+
+    #[test]
+    fn test_sandbox_cd_no_args_allowed() {
+        let plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test/projects"),
+        };
+        // cd (go home) → allowed
+        let action = plugin.on_before_command("cd", &ctx);
+        assert_eq!(action, PluginCommandAction::Allow);
+    }
+
+    #[test]
+    fn test_sandbox_cd_allows_agent_mode() {
+        // Agent mode plugin doesn't restrict cd
+        let mut plugin = SandboxCdPlugin::kids(Path::new("/home/test"));
+        plugin.mode = Mode::Agent;
+        let profile = make_profile();
+        let config = make_config();
+        let ctx = PluginContext {
+            profile: &profile,
+            config: &config,
+            working_dir: Path::new("/home/test"),
+        };
+        // cd / → allowed in agent mode
+        let action = plugin.on_before_command("cd /", &ctx);
+        assert_eq!(action, PluginCommandAction::Allow);
     }
 }

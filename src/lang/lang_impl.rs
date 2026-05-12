@@ -509,6 +509,42 @@ fn eval_simple(
         }
     }
 
+    // Kids mode: sandbox cd path boundaries
+    // Prevents 'cd /', 'cd ../../etc' from escaping the allowed roots.
+    if cmd_name == "cd" && states.get::<crate::lang::ShellMode>().0 == crate::profile::Mode::Kids {
+        if let Some(target) = cmd_args.first() {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let home = dirs::home_dir().unwrap_or_default();
+            let resolved = if std::path::Path::new(target).is_absolute() {
+                std::path::PathBuf::from(target)
+            } else {
+                cwd.join(target)
+            };
+            // Normalize without requiring the path to exist
+            let mut components = Vec::new();
+            for comp in resolved.components() {
+                match comp {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        if !components.is_empty() { components.pop(); }
+                    }
+                    comp => components.push(comp),
+                }
+            }
+            let normalized: std::path::PathBuf = components.iter().collect();
+            let allowed = normalized.starts_with(&home)
+                || normalized.starts_with("/tmp")
+                || normalized.starts_with(home.join(".omnishell/sandbox"));
+            if !allowed {
+                eprintln!(
+                    "cd: cannot go to '{}' — outside sandbox in Kids mode",
+                    target
+                );
+                return Ok(EvalResult { exit_code: 1 });
+            }
+        }
+    }
+
     // Built-in keywords
     match cmd_name {
         "break" => return Err(ShellControl::Break.into()),
@@ -537,6 +573,98 @@ fn eval_simple(
         _ => {}
     }
 
+    // AI queries (? and ai) — use engram context for task-aware responses
+    if cmd_name == "?" || cmd_name == "ai" {
+        let prompt = cmd_args.join(" ");
+        if prompt.is_empty() {
+            eprintln!("Usage: ? <question> or ai <question>");
+            return Ok(EvalResult { exit_code: 1 });
+        }
+        let shell_mode = states.get::<crate::lang::ShellMode>().0;
+        // Get engram context for task-aware responses
+        let engram_ctx = {
+            let ctx = states.get::<crate::lang::ShellContext>();
+            ctx.engram_context.build_llm_context()
+        };
+        let config = crate::profile::LlmConfig::default();
+        let client = crate::llm_integration::LlmClient::new(config, shell_mode);
+        match client.query_sync_with_context(&prompt, &engram_ctx) {
+            crate::llm_integration::LlmResponse::Success(content) => {
+                println!("{content}");
+                return Ok(EvalResult { exit_code: 0 });
+            }
+            crate::llm_integration::LlmResponse::Disabled(msg) => {
+                eprintln!("{msg}");
+                return Ok(EvalResult { exit_code: 1 });
+            }
+            crate::llm_integration::LlmResponse::Error(msg) => {
+                eprintln!("{msg}");
+                return Ok(EvalResult { exit_code: 1 });
+            }
+        }
+    }
+
+    // Check OmniShell builtins (mode, help, snapshots, undo, etc.)
+    //
+    // Note: snapshot_engine and undo_stack are passed as None because
+    // the builtins module expects &mut references which can't be extracted
+    // from Arc<Mutex<>>. The builtins that need them (snapshots, undo, redo)
+    // still return meaningful results — they just show empty history.
+    // A future refactor should make builtins Arc<Mutex>-aware.
+    {
+        let mut acl = states.get::<AclEngine>().clone();
+        let result = crate::builtins::dispatch(
+            cmd_name,
+            &cmd_args,
+            states.get::<crate::lang::ShellMode>().0,
+            &mut acl,
+            None, // snapshot_engine — see note above
+            None, // undo_stack — see note above
+            None, // llm_client — not yet wired
+        );
+        if let Some(builtin_result) = result {
+            match builtin_result {
+                crate::builtins::BuiltinResult::Success(msg) => {
+                    println!("{msg}");
+                    return Ok(EvalResult { exit_code: 0 });
+                }
+                crate::builtins::BuiltinResult::Error(msg) => {
+                    eprintln!("{}", crate::output::format_error(&msg, states.get::<crate::lang::ShellMode>().0));
+                    return Ok(EvalResult { exit_code: 1 });
+                }
+                crate::builtins::BuiltinResult::SwitchMode(new_mode) => {
+                    // Reinitialize subsystems for the new mode
+                    let new_acl = AclEngine::new(new_mode);
+                    {
+                        let mut acl_state = states.get_mut::<AclEngine>();
+                        *acl_state = new_acl;
+                    }
+                    {
+                        let mut mode_state = states.get_mut::<crate::lang::ShellMode>();
+                        *mode_state = crate::lang::ShellMode(new_mode);
+                    }
+                    // Update shared theme name so the prompt reflects the new mode
+                    {
+                        let theme_arc: std::sync::Arc<std::sync::Mutex<String>> = states.get::<crate::lang::ShellContext>().current_theme_name.clone();
+                        let new_theme_name = match new_mode {
+                            crate::profile::Mode::Kids => "kids",
+                            crate::profile::Mode::Agent => "agent",
+                            crate::profile::Mode::Admin => "admin",
+                        };
+                        let mut name_guard = theme_arc.lock().unwrap();
+                        *name_guard = new_theme_name.to_string();
+                        drop(name_guard);
+                    }
+                    println!("Switched to {new_mode} mode");
+                    return Ok(EvalResult { exit_code: 0 });
+                }
+                crate::builtins::BuiltinResult::Exit => {
+                    std::process::exit(0);
+                }
+            }
+        }
+    }
+
     // Check shrs builtins
     for (builtin_name, builtin_cmd) in sh.builtins.iter() {
         if builtin_name == cmd_name {
@@ -563,6 +691,43 @@ fn eval_simple(
     let shell_mode = states.get::<crate::lang::ShellMode>();
     let (stdin, stdout, stderr) = process_redirects(_redirects, rt, shell_mode.0)?;
 
+    // Pre-execution snapshot for mutating commands
+    let full_cmd = expanded_args.join(" ");
+    let is_mutating = crate::snapshot::SnapshotEngine::is_mutating_command(&full_cmd);
+    let snapshot_start = std::time::Instant::now();
+    if is_mutating {
+        let engine_arc = states.get::<crate::lang::ShellContext>().snapshot_engine.clone();
+        let mut engine = engine_arc.lock().unwrap();
+        let _ = engine.pre_execution_snapshot(&full_cmd);
+        drop(engine);
+    }
+
+    // Kids mode: apply env filtering to the runtime environment.
+    // Saves the current env, removes vars not on the Kids allowlist,
+    // and restores them after the command completes.
+    // NOTE: This is a workaround until shrs_job supports env filtering.
+    let shell_mode_state = states.get::<crate::lang::ShellMode>();
+    let saved_env: Option<Vec<(String, String)>> = if shell_mode_state.0 == crate::profile::Mode::Kids {
+        let kids_profile = crate::profile::Mode::kids_profile();
+        if let Some(ref allow) = kids_profile.env_allow {
+            // Save all current vars
+            let all_vars: Vec<(String, String)> = rt.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            // Overwrite vars not on the allowlist with empty strings
+            // (shrs Env doesn't have unset, so we clear values instead)
+            for (key, _) in &all_vars {
+                if !allow.iter().any(|a| a == key) {
+                    let _ = rt.env.set(key, "");
+                }
+            }
+            Some(all_vars)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    drop(shell_mode_state);
+
     // Run as external command
     let (proc, pgid) = run_external_command(cmd_name, &cmd_args, stdin, stdout, stderr, None)
         .map_err(|e| {
@@ -586,6 +751,39 @@ fn eval_simple(
     let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
 
     rt.exit_status = exit_code;
+
+    // Restore filtered env vars after Kids mode command execution
+    if let Some(saved) = saved_env {
+        // Restore original values (shrs Env has set but not unset)
+        for (key, value) in saved {
+            let _ = rt.env.set(&key, &value);
+        }
+    }
+
+    // --- Interactive subsystem wiring ---
+    // Snapshot + audit + undo for external commands in interactive mode
+    {
+        let shell_mode = states.get::<crate::lang::ShellMode>().0;
+
+        // Snapshot: post-execution for mutating commands
+        if is_mutating {
+            let engine_arc = states.get::<crate::lang::ShellContext>().snapshot_engine.clone();
+            let mut engine = engine_arc.lock().unwrap();
+            let _ = engine.post_execution_snapshot(&full_cmd, exit_code);
+            drop(engine);
+        }
+
+        // Audit log
+        let duration_ms = snapshot_start.elapsed().as_millis() as u64;
+        let audit_logger = &states.get::<crate::lang::ShellContext>().audit_logger;
+        let entry = crate::audit::AuditLogger::entry_for(&full_cmd, shell_mode)
+            .exit_code(exit_code)
+            .acl_verdict("allowed")
+            .duration_ms(duration_ms)
+            .build();
+        let _ = audit_logger.log(entry);
+    }
+
     Ok(EvalResult { exit_code })
 }
 

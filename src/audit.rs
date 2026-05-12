@@ -134,6 +134,11 @@ impl AuditLogger {
     }
 
     /// Write an entry to the audit log file.
+    ///
+    /// Uses an advisory file lock (flock) to prevent concurrent writers from
+    /// interleaving writes or racing on rotation. This is important because
+    /// OmniShellTool (agentic-loop integration) and the interactive shell
+    /// can both write audit entries concurrently.
     fn write_to_disk(&self, entry: &AuditEntry) -> std::io::Result<()> {
         if let Some(parent) = self.log_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -145,12 +150,35 @@ impl AuditLogger {
             .append(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{json}")?;
+        // Acquire exclusive lock before writing + rotation check
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            // BLOCKING lock — waits until exclusive access is granted
+            let lock_result = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            if lock_result != 0 {
+                // If locking fails, proceed anyway — better to log than to lose data
+                tracing::warn!("Audit log flock failed, writing without lock");
+            }
+        }
 
-        // File rotation: if current log exceeds max_file_size, rotate it
-        let metadata = file.metadata()?;
-        if metadata.len() > self.config.max_file_size {
-            drop(file); // close the file handle before renaming
+        writeln!(file, "{json}")?;
+        file.flush()?; // Ensure data is on disk before checking size
+
+        // Check rotation while we hold the lock
+        let needs_rotation = file.metadata()?.len() > self.config.max_file_size;
+
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            // Release lock before rename (rename is atomic on POSIX)
+            unsafe { libc::flock(fd, libc::LOCK_UN) };
+        }
+
+        if needs_rotation {
+            drop(file); // close handle before renaming
             self.rotate_log()?;
         }
 

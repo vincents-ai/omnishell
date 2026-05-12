@@ -11,7 +11,7 @@ mod shell_mode;
 
 pub use functions::FunctionTable;
 pub use lang_impl::OmniShellLang;
-pub use shell_mode::ShellMode;
+pub use shell_mode::{ShellContext, ShellMode};
 
 use lazy_static::lazy_static;
 use regex::Regex;

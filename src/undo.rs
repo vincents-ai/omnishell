@@ -58,6 +58,10 @@ impl UndoStack {
     }
 
     /// Undo the most recent command. Returns the pre-execution snapshot to restore.
+    ///
+    /// Note: The caller is responsible for restoring the filesystem state using
+    /// the snapshot's `commit_id`. The undo stack tracks *what* to undo, but
+    /// the actual git restoration is done by the snapshot engine.
     pub fn undo(&mut self) -> Option<&Snapshot> {
         if self.position == 0 {
             return None;
@@ -68,6 +72,13 @@ impl UndoStack {
         record.undone = true;
 
         Some(&record.pre_snapshot)
+    }
+
+    /// Undo the most recent command and return its commit ID for git restoration.
+    /// Returns None if there's nothing to undo or the snapshot has no commit.
+    pub fn undo_with_commit(&mut self) -> Option<gix::ObjectId> {
+        let snapshot = self.undo()?;
+        snapshot.commit_id
     }
 
     /// Redo the most recently undone command. Returns the post-execution snapshot.

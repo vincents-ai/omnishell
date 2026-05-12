@@ -68,6 +68,9 @@ dirs = "6"
 # Glob pattern matching for ACL
 glob = "0.3"
 
+# Engram memory system (git-based entity storage)
+engram = { path = "../../agentic-git/engram", features = ["sandbox"] }
+
 # Shell-style lexing for command tokenization
 shlex = "1.3"
 

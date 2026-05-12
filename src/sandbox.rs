@@ -255,7 +255,8 @@ impl Sandbox {
             }
         }
 
-        // Set resource limits
+        // Set resource limits on the OmniShell process itself — these are
+        // inherited by children, which is what we want.
         for limit in &self.config.rlimits {
             let resource = match limit.resource {
                 RlimitResource::Cpu => libc::RLIMIT_CPU,
@@ -280,25 +281,55 @@ impl Sandbox {
             }
         }
 
-        // Unshare namespaces (requires CAP_SYS_ADMIN or unprivileged user namespaces)
-        if self.config.new_pid_namespace || self.config.new_network_namespace {
-            let mut flags = nix::sched::CloneFlags::empty();
-            if self.config.new_pid_namespace {
-                flags |= nix::sched::CloneFlags::CLONE_NEWPID;
-            }
-            if self.config.new_network_namespace {
-                flags |= nix::sched::CloneFlags::CLONE_NEWNET;
-            }
-            match nix::sched::unshare(flags) {
-                Ok(()) => tracing::info!("Sandbox namespaces created: {:?}", flags),
-                Err(e) => {
-                    // Namespace creation may fail without privileges — degrade gracefully
-                    tracing::warn!("Sandbox namespace unshare failed (need CAP_SYS_ADMIN?): {e}");
-                }
-            }
-        }
+        // NOTE: We do NOT call unshare() here. Namespaces must be applied
+        // to child processes only, via pre_exec hooks in the command spawn.
+        // Unsharing OmniShell's own namespaces would break networking,
+        // process management, and filesystem access for the shell itself.
+        // See: child_pre_exec() method.
 
         Ok(())
+    }
+
+    /// Get a pre_exec closure that applies sandbox namespaces to child processes.
+    ///
+    /// Use this when spawning child commands:
+    /// ```ignore
+    /// let sandbox = Sandbox::new(Sandbox::kids_default(home));
+    /// let mut cmd = std::process::Command::new("ls");
+    /// unsafe { cmd.pre_exec(sandbox.child_pre_exec()); }
+    /// ```
+    ///
+    /// This ensures namespaces (PID, network) are applied to the child,
+    /// NOT to OmniShell itself.
+    pub fn child_pre_exec(&self) -> Box<dyn Fn() -> std::io::Result<()> + Send + Sync> {
+        let new_pid = self.config.new_pid_namespace;
+        let new_net = self.config.new_network_namespace;
+        let enabled = self.config.enabled;
+
+        Box::new(move || {
+            if !enabled {
+                return Ok(());
+            }
+
+            let mut flags = nix::sched::CloneFlags::empty();
+            if new_pid {
+                flags |= nix::sched::CloneFlags::CLONE_NEWPID;
+            }
+            if new_net {
+                flags |= nix::sched::CloneFlags::CLONE_NEWNET;
+            }
+
+            if !flags.is_empty() {
+                match nix::sched::unshare(flags) {
+                    Ok(()) => tracing::debug!("Child process sandbox namespaces created: {:?}", flags),
+                    Err(e) => {
+                        tracing::warn!("Child namespace unshare failed: {e}");
+                        // Don't fail the exec — degraded mode is better than no execution
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 }
 

@@ -6,9 +6,15 @@ use crate::error::{OmniShellError, Result};
 use crate::profile::OmniShellConfig;
 
 /// Load configuration from XDG user dir and system dir, with CLI override.
+///
+/// After loading, auto-populates `username` on any profile that has it
+/// set to `None` by binding it to `$USER`. This ensures the profile resolver
+/// can match profiles by username even when config files don't specify it.
 pub fn load_config(cli_config_path: Option<&Path>) -> Result<OmniShellConfig> {
     if let Some(path) = cli_config_path {
-        return load_from_file(path);
+        let mut config = load_from_file(path)?;
+        auto_bind_usernames(&mut config);
+        return Ok(config);
     }
 
     let user_dir = dirs::config_dir()
@@ -20,14 +26,36 @@ pub fn load_config(cli_config_path: Option<&Path>) -> Result<OmniShellConfig> {
     let user_config = load_from_dir(&user_dir).ok();
     let sys_config = load_from_dir(&sys_dir).ok();
 
-    let merged = match (user_config, sys_config) {
+    let mut merged = match (user_config, sys_config) {
         (Some(u), Some(s)) => merge_configs(u, s),
         (Some(u), None) => u,
         (None, Some(s)) => s,
         (None, None) => OmniShellConfig::default(),
     };
 
+    auto_bind_usernames(&mut merged);
+
     Ok(merged)
+}
+
+/// Auto-populate `username` on profiles that don't have one set.
+/// Binds to `$USER` for the default profile, or leaves as None for named profiles.
+fn auto_bind_usernames(config: &mut OmniShellConfig) {
+    if let Ok(username) = std::env::var("USER") {
+        // Only set on the default profile if it has no username
+        if let Some(default_name) = &config.default_profile {
+            if let Some(default_profile) = config.profile.get_mut(default_name) {
+                if default_profile.username.is_none() {
+                    default_profile.username = Some(username);
+                    tracing::debug!(
+                        "Auto-bound profile '{}' to $USER ({})",
+                        default_name,
+                        default_profile.username.as_deref().unwrap_or("?")
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn load_from_dir(dir: &Path) -> Result<OmniShellConfig> {

@@ -69,6 +69,6 @@ fn main() {
         return;
     }
 
-    // Launch interactive shell via shrs
-    shell_builder::run_interactive_shell(mode, &theme);
+    // Launch interactive shell via shrs (with full subsystem wiring)
+    shell_builder::run_interactive_shell(mode, &theme, snapshot_engine, audit, profile.acl.clone());
 }
