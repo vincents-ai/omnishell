@@ -43,20 +43,8 @@ fn main() {
     let audit = AuditLogger::new(mode, AuditConfig::default());
     let theme = profile.theme();
 
-    // Print startup banner
-    eprintln!(
-        "{}",
-        theme.primary(&format!(
-            "OmniShell {} — {}",
-            env!("CARGO_PKG_VERSION"),
-            profile_name,
-        ))
-    );
-    if !_llm_enabled {
-        eprintln!("{}", theme.error("(LLM disabled)"));
-    }
-
-    // If --command was provided, execute and exit
+    // If --command was provided, execute and exit without an interactive
+    // banner so OmniShell can be used as a sh-compatible scripting shell.
     if let Some(ref cmd) = args.command {
         let mut undo_stack = omnishell::UndoStack::new();
         single_command::execute_single_command(
@@ -67,6 +55,19 @@ fn main() {
             &audit,
         );
         return;
+    }
+
+    // Print startup banner for interactive sessions only.
+    eprintln!(
+        "{}",
+        theme.primary(&format!(
+            "OmniShell {} — {}",
+            env!("CARGO_PKG_VERSION"),
+            profile_name,
+        ))
+    );
+    if !_llm_enabled {
+        eprintln!("{}", theme.error("(LLM disabled)"));
     }
 
     // Launch interactive shell via shrs (with full subsystem wiring)

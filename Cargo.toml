@@ -89,9 +89,12 @@ gix = { git = "https://github.com/vincents-ai/gitoxide" }
 anymap = { path = "crates/anymap_compat" }
 shrs_core = { git = "https://github.com/vincents-ai/shrs" }
 shrs = { git = "https://github.com/vincents-ai/shrs" }
-shrs_job = { git = "https://github.com/vincents-ai/shrs" }
+shrs_job = { path = "crates/shrs_job" }
 shrs_lang = { git = "https://github.com/vincents-ai/shrs" }
 shrs_utils = { git = "https://github.com/vincents-ai/shrs" }
+
+[patch."https://github.com/vincents-ai/shrs"]
+shrs_job = { path = "crates/shrs_job" }
 
 [dev-dependencies]
 tempfile = "3"

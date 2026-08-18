@@ -1,0 +1,16 @@
+[package]
+name = "shrs_job"
+version = "0.0.6"
+description = "utilities for managing jobs and processes"
+
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/vincents-ai/shrs"
+
+[dependencies]
+nix = { version = "0.26", default-features = false, features = ["fs", "term", "process", "signal"]}
+
+lazy_static = "1.4"
+thiserror = "1"
+anyhow = "1"
+log = "0.4"

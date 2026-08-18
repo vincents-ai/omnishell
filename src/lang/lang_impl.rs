@@ -7,6 +7,7 @@ use shrs_job::{
     run_external_command, JobManager, Output, Process, ProcessGroup, Stdin as JobStdin,
 };
 use shrs_lang::{ast, Lexer, Parser, Token};
+use std::process::{Command, ExitStatus, Stdio};
 
 use super::{envsubst, expand_arg, EvalResult};
 use crate::acl::{AclEngine, Verdict};
@@ -465,6 +466,90 @@ fn process_redirects(
     Ok((stdin, stdout, stderr))
 }
 
+fn run_foreground_command(
+    program: &str,
+    args: &[String],
+    stdin: JobStdin,
+    stdout: Output,
+    stderr: Output,
+) -> std::io::Result<ExitStatus> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(program);
+    command.args(args);
+
+    let mut stdin_fd = None;
+    match stdin {
+        JobStdin::Inherit => {
+            command.stdin(Stdio::inherit());
+        }
+        JobStdin::File(file) => {
+            command.stdin(Stdio::from(file));
+        }
+        JobStdin::Child(child) => {
+            command.stdin(Stdio::from(child));
+        }
+        JobStdin::FileDescriptor(fd) => {
+            stdin_fd = Some(fd);
+        }
+    }
+
+    let mut stdout_fd = None;
+    match stdout {
+        Output::Inherit => {
+            command.stdout(Stdio::inherit());
+        }
+        Output::File(file) => {
+            command.stdout(Stdio::from(file));
+        }
+        Output::CreatePipe => {
+            command.stdout(Stdio::piped());
+        }
+        Output::FileDescriptor(fd) => {
+            stdout_fd = Some(fd);
+        }
+    }
+
+    let mut stderr_fd = None;
+    match stderr {
+        Output::Inherit => {
+            command.stderr(Stdio::inherit());
+        }
+        Output::File(file) => {
+            command.stderr(Stdio::from(file));
+        }
+        Output::CreatePipe => {
+            command.stderr(Stdio::piped());
+        }
+        Output::FileDescriptor(fd) => {
+            stderr_fd = Some(fd);
+        }
+    }
+
+    unsafe {
+        command.pre_exec(move || {
+            if let Some(fd) = stdin_fd {
+                if fd != libc::STDIN_FILENO {
+                    libc::dup2(fd, libc::STDIN_FILENO);
+                }
+            }
+            if let Some(fd) = stdout_fd {
+                if fd != libc::STDOUT_FILENO {
+                    libc::dup2(fd, libc::STDOUT_FILENO);
+                }
+            }
+            if let Some(fd) = stderr_fd {
+                if fd != libc::STDERR_FILENO {
+                    libc::dup2(fd, libc::STDERR_FILENO);
+                }
+            }
+            Ok(())
+        });
+    }
+
+    command.status()
+}
+
 fn eval_simple(
     sh: &Shell,
     states: &States,
@@ -526,7 +611,9 @@ fn eval_simple(
                 match comp {
                     std::path::Component::CurDir => {}
                     std::path::Component::ParentDir => {
-                        if !components.is_empty() { components.pop(); }
+                        if !components.is_empty() {
+                            components.pop();
+                        }
                     }
                     comp => components.push(comp),
                 }
@@ -629,7 +716,10 @@ fn eval_simple(
                     return Ok(EvalResult { exit_code: 0 });
                 }
                 crate::builtins::BuiltinResult::Error(msg) => {
-                    eprintln!("{}", crate::output::format_error(&msg, states.get::<crate::lang::ShellMode>().0));
+                    eprintln!(
+                        "{}",
+                        crate::output::format_error(&msg, states.get::<crate::lang::ShellMode>().0)
+                    );
                     return Ok(EvalResult { exit_code: 1 });
                 }
                 crate::builtins::BuiltinResult::SwitchMode(new_mode) => {
@@ -645,7 +735,10 @@ fn eval_simple(
                     }
                     // Update shared theme name so the prompt reflects the new mode
                     {
-                        let theme_arc: std::sync::Arc<std::sync::Mutex<String>> = states.get::<crate::lang::ShellContext>().current_theme_name.clone();
+                        let theme_arc: std::sync::Arc<std::sync::Mutex<String>> = states
+                            .get::<crate::lang::ShellContext>()
+                            .current_theme_name
+                            .clone();
                         let new_theme_name = match new_mode {
                             crate::profile::Mode::Kids => "kids",
                             crate::profile::Mode::Agent => "agent",
@@ -696,7 +789,10 @@ fn eval_simple(
     let is_mutating = crate::snapshot::SnapshotEngine::is_mutating_command(&full_cmd);
     let snapshot_start = std::time::Instant::now();
     if is_mutating {
-        let engine_arc = states.get::<crate::lang::ShellContext>().snapshot_engine.clone();
+        let engine_arc = states
+            .get::<crate::lang::ShellContext>()
+            .snapshot_engine
+            .clone();
         let mut engine = engine_arc.lock().unwrap();
         let _ = engine.pre_execution_snapshot(&full_cmd);
         drop(engine);
@@ -707,30 +803,35 @@ fn eval_simple(
     // and restores them after the command completes.
     // NOTE: This is a workaround until shrs_job supports env filtering.
     let shell_mode_state = states.get::<crate::lang::ShellMode>();
-    let saved_env: Option<Vec<(String, String)>> = if shell_mode_state.0 == crate::profile::Mode::Kids {
-        let kids_profile = crate::profile::Mode::kids_profile();
-        if let Some(ref allow) = kids_profile.env_allow {
-            // Save all current vars
-            let all_vars: Vec<(String, String)> = rt.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            // Overwrite vars not on the allowlist with empty strings
-            // (shrs Env doesn't have unset, so we clear values instead)
-            for (key, _) in &all_vars {
-                if !allow.iter().any(|a| a == key) {
-                    let _ = rt.env.set(key, "");
+    let saved_env: Option<Vec<(String, String)>> =
+        if shell_mode_state.0 == crate::profile::Mode::Kids {
+            let kids_profile = crate::profile::Mode::kids_profile();
+            if let Some(ref allow) = kids_profile.env_allow {
+                // Save all current vars
+                let all_vars: Vec<(String, String)> =
+                    rt.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                // Overwrite vars not on the allowlist with empty strings
+                // (shrs Env doesn't have unset, so we clear values instead)
+                for (key, _) in &all_vars {
+                    if !allow.iter().any(|a| a == key) {
+                        let _ = rt.env.set(key, "");
+                    }
                 }
+                Some(all_vars)
+            } else {
+                None
             }
-            Some(all_vars)
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
     drop(shell_mode_state);
 
-    // Run as external command
-    let (proc, pgid) = run_external_command(cmd_name, &cmd_args, stdin, stdout, stderr, None)
-        .map_err(|e| {
+    // Run simple foreground commands directly instead of through shrs_job's
+    // job-control path. shrs_job currently enables terminal job control
+    // unconditionally and can stop the child in pre_exec before exec, which
+    // makes basic commands such as `w` appear to hang forever.
+    let status =
+        run_foreground_command(cmd_name, &cmd_args, stdin, stdout, stderr).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::anyhow!("__notfound__")
             } else {
@@ -738,17 +839,7 @@ fn eval_simple(
             }
         })?;
 
-    let proc_group = ProcessGroup {
-        id: pgid,
-        processes: vec![proc],
-        foreground: true,
-    };
-    let job_id = job_mgr.create_job(cmd_name, proc_group);
-    let status = job_mgr
-        .put_job_in_foreground(Some(job_id), false)
-        .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
-
-    let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
+    let exit_code = status.code().unwrap_or(1);
 
     rt.exit_status = exit_code;
 
@@ -767,7 +858,10 @@ fn eval_simple(
 
         // Snapshot: post-execution for mutating commands
         if is_mutating {
-            let engine_arc = states.get::<crate::lang::ShellContext>().snapshot_engine.clone();
+            let engine_arc = states
+                .get::<crate::lang::ShellContext>()
+                .snapshot_engine
+                .clone();
             let mut engine = engine_arc.lock().unwrap();
             let _ = engine.post_execution_snapshot(&full_cmd, exit_code);
             drop(engine);
@@ -787,41 +881,157 @@ fn eval_simple(
     Ok(EvalResult { exit_code })
 }
 
-/// Evaluate a pipeline.
-fn eval_pipeline(
-    sh: &Shell,
+fn collect_pipeline<'a>(cmd: &'a ast::Command, stages: &mut Vec<&'a ast::Command>) {
+    match cmd {
+        ast::Command::Pipeline(left, right) => {
+            collect_pipeline(left, stages);
+            collect_pipeline(right, stages);
+        }
+        other => stages.push(other),
+    }
+}
+
+fn expand_simple_args(
     states: &States,
-    job_mgr: &mut JobManager,
+    rt: &shrs::prelude::Runtime,
+    args: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let mut expanded = Vec::new();
+    for arg in args {
+        let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
+        for part in expand_arg(&substed) {
+            expanded.push(part);
+        }
+    }
+
+    if !expanded.is_empty() {
+        let acl = states.get::<AclEngine>();
+        let full_cmd = expanded.join(" ");
+        if let Verdict::Deny(reason) = acl.evaluate(&full_cmd) {
+            let shell_mode = states.get::<crate::lang::ShellMode>().0;
+            eprintln!("{}", crate::output::format_error(&reason, shell_mode));
+            anyhow::bail!("pipeline command denied");
+        }
+    }
+
+    Ok(expanded)
+}
+
+/// Evaluate a foreground pipeline directly.
+fn eval_pipeline(
+    _sh: &Shell,
+    states: &States,
+    _job_mgr: &mut JobManager,
     rt: &mut shrs::prelude::Runtime,
     a_cmd: &ast::Command,
     b_cmd: &ast::Command,
 ) -> anyhow::Result<EvalResult> {
-    let (mut a_procs, _) = eval_to_procs_with_io(
-        sh,
-        states,
-        job_mgr,
-        rt,
-        a_cmd,
-        None,
-        Some(Output::CreatePipe),
-    )?;
+    let mut stages = Vec::new();
+    collect_pipeline(a_cmd, &mut stages);
+    collect_pipeline(b_cmd, &mut stages);
 
-    let b_stdin = a_procs.last_mut().unwrap().stdout();
-    let (b_procs, b_pgid) = eval_to_procs_with_io(sh, states, job_mgr, rt, b_cmd, b_stdin, None)?;
+    let mut children = Vec::new();
+    let mut previous_stdout = None;
 
-    a_procs.extend(b_procs);
+    for (idx, stage) in stages.iter().enumerate() {
+        let is_last = idx + 1 == stages.len();
+        let (args, redirects) = match stage {
+            ast::Command::Simple {
+                args, redirects, ..
+            } => (args, redirects),
+            other => {
+                // Fallback for compound commands in pipeline context.
+                let result = eval_command(_sh, states, _job_mgr, rt, other)?;
+                rt.exit_status = result.exit_code;
+                return Ok(result);
+            }
+        };
 
-    let proc_group = ProcessGroup {
-        id: b_pgid,
-        processes: a_procs,
-        foreground: true,
-    };
-    let job_id = job_mgr.create_job("pipeline", proc_group);
-    let status = job_mgr
-        .put_job_in_foreground(Some(job_id), false)
-        .map_err(|e| anyhow::anyhow!("job error: {e}"))?;
+        let expanded = expand_simple_args(states, rt, args)?;
+        if expanded.is_empty() {
+            continue;
+        }
 
-    let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
+        let mut command = Command::new(&expanded[0]);
+        command.args(&expanded[1..]);
+
+        let had_previous_stdout = previous_stdout.is_some();
+        if let Some(stdout) = previous_stdout.take() {
+            command.stdin(Stdio::from(stdout));
+        }
+
+        if is_last {
+            let mode = states.get::<crate::lang::ShellMode>().0;
+            let (stdin, stdout, stderr) = process_redirects(redirects, rt, mode)?;
+            if !had_previous_stdout {
+                match stdin {
+                    JobStdin::Inherit => {}
+                    JobStdin::File(file) => {
+                        command.stdin(Stdio::from(file));
+                    }
+                    JobStdin::Child(child) => {
+                        command.stdin(Stdio::from(child));
+                    }
+                    JobStdin::FileDescriptor(fd) => {
+                        let file = std::fs::File::open(format!("/proc/self/fd/{fd}"))?;
+                        command.stdin(Stdio::from(file));
+                    }
+                }
+            }
+            match stdout {
+                Output::Inherit => {}
+                Output::File(file) => {
+                    command.stdout(Stdio::from(file));
+                }
+                Output::CreatePipe => {
+                    command.stdout(Stdio::piped());
+                }
+                Output::FileDescriptor(fd) => {
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(format!("/proc/self/fd/{fd}"))?;
+                    command.stdout(Stdio::from(file));
+                }
+            }
+            match stderr {
+                Output::Inherit => {}
+                Output::File(file) => {
+                    command.stderr(Stdio::from(file));
+                }
+                Output::CreatePipe => {
+                    command.stderr(Stdio::piped());
+                }
+                Output::FileDescriptor(fd) => {
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(format!("/proc/self/fd/{fd}"))?;
+                    command.stderr(Stdio::from(file));
+                }
+            }
+        } else {
+            command.stdout(Stdio::piped());
+        }
+
+        let mut child = command.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!("__notfound__")
+            } else {
+                anyhow::anyhow!("pipeline execution error: {e}")
+            }
+        })?;
+
+        if !is_last {
+            previous_stdout = child.stdout.take();
+        }
+        children.push(child);
+    }
+
+    let mut exit_code = 0;
+    for mut child in children {
+        let status = child.wait()?;
+        exit_code = status.code().unwrap_or(1);
+    }
+
     rt.exit_status = exit_code;
     Ok(EvalResult { exit_code })
 }

@@ -62,9 +62,9 @@ pub fn execute_single_command(
         );
     }
 
-    // Build shell context and evaluate natively — no sh -c
-    // Use shrs_lang::PosixLang for full POSIX compatibility in --command mode
-    // (variable assignment, arithmetic expansion, command substitution, etc.)
+    // Build shell context and evaluate natively — no sh -c. PosixLang has the
+    // best sh-compatible grammar coverage for --command scripting, while the
+    // patched shrs_job execution path below keeps it from hanging.
     let completer = omnishell::completion::CompletionEngine::new(mode);
     let (shell, states) = ShellBuilder::default()
         .with_lang(PosixLang::default())
