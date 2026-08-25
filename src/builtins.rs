@@ -42,8 +42,8 @@ pub fn dispatch(
     match command {
         "?" | "ai" => Some(cmd_ai(args, mode, llm_client)),
         "snapshots" => Some(cmd_snapshots(args, snapshot_engine)),
-        "undo" => Some(cmd_undo(args, undo_stack)),
-        "redo" => Some(cmd_redo(args, undo_stack)),
+        "undo" => Some(cmd_undo(args, undo_stack, snapshot_engine)),
+        "redo" => Some(cmd_redo(args, undo_stack, snapshot_engine)),
         "allow" => Some(cmd_allow(args, acl, mode)),
         "block" => Some(cmd_block(args, acl, mode)),
         "export" => Some(cmd_export(args)),
@@ -197,7 +197,11 @@ fn cmd_snapshots(args: &[String], engine: Option<&SnapshotEngine>) -> BuiltinRes
 }
 
 /// `undo` — Undo last command via UndoStack.
-fn cmd_undo(args: &[String], undo_stack: Option<&mut UndoStack>) -> BuiltinResult {
+fn cmd_undo(
+    args: &[String],
+    undo_stack: Option<&mut UndoStack>,
+    snapshot_engine: Option<&SnapshotEngine>,
+) -> BuiltinResult {
     let count = if args.is_empty() {
         1
     } else {
@@ -207,14 +211,29 @@ fn cmd_undo(args: &[String], undo_stack: Option<&mut UndoStack>) -> BuiltinResul
     match undo_stack {
         Some(stack) => {
             let mut undone = 0;
+            let mut restore_errors: Vec<String> = Vec::new();
             for _ in 0..count {
-                if stack.undo().is_none() {
-                    break;
+                // undo_with_commit returns the pre-execution commit to restore to.
+                let target = stack.undo_with_commit();
+                match (target, snapshot_engine) {
+                    (Some(commit_id), Some(engine)) if engine.has_repo() => {
+                        if let Err(e) = engine.restore_to_commit(commit_id) {
+                            restore_errors.push(e);
+                        }
+                        undone += 1;
+                    }
+                    (None, _) => break,
+                    // No engine/repo: still count the stack movement as undone.
+                    _ => undone += 1,
                 }
-                undone += 1;
             }
             if undone == 0 {
                 BuiltinResult::Error("Nothing to undo".to_string())
+            } else if !restore_errors.is_empty() {
+                BuiltinResult::Error(format!(
+                    "Undone {undone} command(s) but restore failed: {}",
+                    restore_errors.join("; ")
+                ))
             } else {
                 BuiltinResult::Success(format!("Undone {undone} command(s)"))
             }
@@ -226,7 +245,11 @@ fn cmd_undo(args: &[String], undo_stack: Option<&mut UndoStack>) -> BuiltinResul
 }
 
 /// `redo` — Redo last undone command via UndoStack.
-fn cmd_redo(args: &[String], undo_stack: Option<&mut UndoStack>) -> BuiltinResult {
+fn cmd_redo(
+    args: &[String],
+    undo_stack: Option<&mut UndoStack>,
+    snapshot_engine: Option<&SnapshotEngine>,
+) -> BuiltinResult {
     let count = if args.is_empty() {
         1
     } else {
@@ -236,14 +259,28 @@ fn cmd_redo(args: &[String], undo_stack: Option<&mut UndoStack>) -> BuiltinResul
     match undo_stack {
         Some(stack) => {
             let mut redone = 0;
+            let mut restore_errors: Vec<String> = Vec::new();
             for _ in 0..count {
-                if stack.redo().is_none() {
-                    break;
+                // redo returns the post-execution snapshot to restore to.
+                let target = stack.redo().and_then(|s| s.commit_id);
+                match (target, snapshot_engine) {
+                    (Some(commit_id), Some(engine)) if engine.has_repo() => {
+                        if let Err(e) = engine.restore_to_commit(commit_id) {
+                            restore_errors.push(e);
+                        }
+                        redone += 1;
+                    }
+                    (None, _) => break,
+                    _ => redone += 1,
                 }
-                redone += 1;
             }
             if redone == 0 {
                 BuiltinResult::Error("Nothing to redo".to_string())
+            } else if !restore_errors.is_empty() {
+                BuiltinResult::Error(format!(
+                    "Redone {redone} command(s) but restore failed: {}",
+                    restore_errors.join("; ")
+                ))
             } else {
                 BuiltinResult::Success(format!("Redone {redone} command(s)"))
             }

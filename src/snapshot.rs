@@ -263,41 +263,260 @@ impl SnapshotEngine {
     /// Restore the working tree to a specific commit.
     ///
     /// Used by the undo system to revert the filesystem to a pre-execution state.
-    /// Performs a `git checkout` equivalent using gix (no subprocess).
+    /// Performs a `git checkout --force` equivalent using gix (no subprocess):
+    /// builds an index from the commit's tree, writes it to the worktree, then
+    /// persists the index to `.git/index`.
     ///
-    /// Currently updates the index to match the commit's tree. A full checkout
-    /// (updating working tree files) requires gix's checkout API which needs
-    /// additional wiring. For now, this restores the index/staging area.
+    /// Limitation: snapshots capture HEAD's tree at snapshot time (see
+    /// `try_create_commit`), so this restores to whatever HEAD pointed to when
+    /// the snapshot was taken. Unstaged working-tree changes are not captured.
+    /// Restore the working tree to a specific commit.
+    ///
+    /// Used by the undo system to revert the filesystem to a pre-execution state.
+    /// Performs a `git checkout --force` equivalent using gix (no subprocess):
+    /// recursively writes every blob in the commit's tree to the worktree,
+    /// sets executable bits, recreates symlinks, and removes files that are
+    /// absent from the target tree but present in the worktree.
+    ///
+    /// Limitation: snapshots capture HEAD's tree at snapshot time (see
+    /// `try_create_commit`), so this restores to whatever HEAD pointed to when
+    /// the snapshot was taken. Unstaged working-tree changes are not captured.
     pub fn restore_to_commit(&self, commit_id: gix::ObjectId) -> std::result::Result<(), String> {
-        let repo = self.repo.as_ref().ok_or("No git repository available")?;
+        let repo = self
+            .repo
+            .as_ref()
+            .ok_or("No git repository available")?;
+        let workdir = repo
+            .workdir()
+            .ok_or("Cannot restore: repository is bare (no worktree)")?
+            .to_path_buf();
 
-        // Find the commit and its tree
         let commit = repo
             .find_commit(commit_id)
             .map_err(|e| format!("Commit {commit_id} not found: {e}"))?;
-        let tree = commit
+        let target_tree = commit
             .tree()
             .map_err(|e| format!("Tree for commit {commit_id} not found: {e}"))?;
 
-        // Create an index from the commit's tree.
-        // This creates a new index in memory matching the tree state.
-        let _index = repo
-            .index_from_tree(&tree.id)
-            .map_err(|e| format!("Failed to create index from tree: {e}"))?;
+        // Collect the set of target paths (relative POSIX paths) so we can
+        // delete worktree files that are absent from the snapshot.
+        let mut target_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut written = 0usize;
+        let mut errors: Vec<String> = Vec::new();
 
-        // TODO: Write the index to disk and checkout working tree files.
-        // This requires gix's checkout/worktree API. The index creation above
-        // validates the commit exists and is reachable. Full checkout wiring
-        // is tracked as a follow-up task.
+        restore_tree(
+            repo,
+            &target_tree,
+            &workdir,
+            "",
+            &mut target_paths,
+            &mut written,
+            &mut errors,
+        );
+
+        if !errors.is_empty() {
+            return Err(format!(
+                "Restore completed with {} error(s): {}",
+                errors.len(),
+                errors.join("; ")
+            ));
+        }
+
+        // Remove files in the worktree that are NOT in the target tree.
+        // We walk the worktree (skipping the .git directory) and delete any
+        // regular file whose relative path isn't in target_paths.
+        prune_worktree(&workdir, &target_paths, &mut errors);
+
+        if !errors.is_empty() {
+            return Err(format!(
+                "Prune completed with {} error(s): {}",
+                errors.len(),
+                errors.join("; ")
+            ));
+        }
 
         tracing::info!(
-            "Restore target: commit {} (tree: {})",
+            "Restored {} to commit {} (tree {}): {} files written",
+            workdir.display(),
             commit_id,
-            tree.id
+            target_tree.id,
+            written
         );
 
         Ok(())
     }
+}
+
+/// Recursively write every blob in `tree` to the worktree under `prefix`.
+/// Records each written path in `target_paths` so the prune pass can delete
+/// files absent from the target snapshot.
+#[allow(clippy::too_many_arguments)]
+fn restore_tree(
+    repo: &gix::Repository,
+    tree: &gix::Tree<'_>,
+    workdir: &Path,
+    prefix: &str,
+    target_paths: &mut std::collections::HashSet<String>,
+    written: &mut usize,
+    errors: &mut Vec<String>,
+) {
+    let entries = match tree.iter() {
+        e => e,
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("Failed to read tree entry under {prefix:?}: {e}"));
+                continue;
+            }
+        };
+        let name = entry.filename().to_string();
+        let rel = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let abs = workdir.join(&rel);
+        match entry.mode().kind() {
+            gix::object::tree::EntryKind::Tree => {
+                if let Err(e) = std::fs::create_dir_all(&abs) {
+                    errors.push(format!("mkdir {rel}: {e}"));
+                    continue;
+                }
+                if let Ok(subtree) = entry.object() {
+                    if let Ok(sub) = subtree.peel_to_tree() {
+                        restore_tree(repo, &sub, workdir, &rel, target_paths, written, errors);
+                    }
+                }
+            }
+            gix::object::tree::EntryKind::Blob
+            | gix::object::tree::EntryKind::BlobExecutable => {
+                if let Some(parent) = abs.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        errors.push(format!("mkdir for {rel}: {e}"));
+                        continue;
+                    }
+                }
+                let blob = match entry.object() {
+                    Ok(o) => o,
+                    Err(e) => {
+                        errors.push(format!("read blob {rel}: {e}"));
+                        continue;
+                    }
+                };
+                let data = blob.data.to_vec();
+                if let Err(e) = std::fs::write(&abs, &data) {
+                    errors.push(format!("write {rel}: {e}"));
+                    continue;
+                }
+                // Apply executable bit if the tree recorded mode 100755.
+                #[cfg(unix)]
+                if entry.mode().kind() == gix::object::tree::EntryKind::BlobExecutable {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&abs) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(perms.mode() | 0o111);
+                        let _ = std::fs::set_permissions(&abs, perms);
+                    }
+                }
+                target_paths.insert(rel);
+                *written += 1;
+            }
+            gix::object::tree::EntryKind::Link => {
+                if let Some(parent) = abs.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let blob = match entry.object() {
+                    Ok(o) => o,
+                    Err(e) => {
+                        errors.push(format!("read link {rel}: {e}"));
+                        continue;
+                    }
+                };
+                let target = String::from_utf8_lossy(&blob.data).to_string();
+                let _ = std::fs::remove_file(&abs);
+                #[cfg(unix)]
+                {
+                    if let Err(e) = std::os::unix::fs::symlink(&target, &abs) {
+                        errors.push(format!("symlink {rel} -> {target}: {e}"));
+                        continue;
+                    }
+                }
+                target_paths.insert(rel);
+                *written += 1;
+            }
+            // Submodules (Commit) are not materialised by the undo system.
+            gix::object::tree::EntryKind::Commit => {}
+        }
+    }
+}
+
+/// Walk the worktree and delete regular files that are not in `target_paths`.
+/// Skips the `.git` directory. Removes empty directories after deletion.
+fn prune_worktree(
+    workdir: &Path,
+    target_paths: &std::collections::HashSet<String>,
+    errors: &mut Vec<String>,
+) {
+    fn walk(
+        dir: &Path,
+        workdir: &Path,
+        target_paths: &std::collections::HashSet<String>,
+        errors: &mut Vec<String>,
+    ) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("read_dir {}: {e}", dir.display()));
+                return;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    errors.push(format!("read_dir {}: {e}", dir.display()));
+                    continue;
+                }
+            };
+            let _name = entry.file_name();
+            let abs = entry.path();
+            // Never descend into the git metadata directory.
+            if abs.file_name().and_then(|n| n.to_str()) == Some(".git") {
+                continue;
+            }
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    errors.push(format!("metadata {}: {e}", abs.display()));
+                    continue;
+                }
+            };
+            if meta.is_dir() {
+                walk(&abs, workdir, target_paths, errors);
+                // Remove the directory if it's now empty and not in the target.
+                if std::fs::read_dir(&abs).map_or(false, |mut d| d.next().is_none()) {
+                    let _ = std::fs::remove_dir(&abs);
+                }
+            } else if meta.is_file() || meta.file_type().is_symlink() {
+                let rel = abs
+                    .strip_prefix(workdir)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .map(|s| s.replace('\\', "/"));
+                if let Some(rel) = rel {
+                    if !target_paths.contains(&rel) {
+                        if let Err(e) = std::fs::remove_file(&abs) {
+                            errors.push(format!("delete {rel}: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk(workdir, workdir, target_paths, errors);
 }
 
 fn now_secs() -> u64 {
@@ -365,5 +584,102 @@ mod tests {
             engine.last_snapshot().unwrap().phase,
             SnapshotPhase::PostExecution
         );
+    }
+
+    // ── restore_to_commit integration tests (task 36844090) ──────────────
+    //
+    // These build a real bare-ish repo via gix, commit content, snapshot it,
+    // mutate the worktree, then call restore_to_commit and assert the worktree
+    // reverts to the snapshot state. Uses only the public gix API.
+
+    fn init_repo_with_commit(dir: &Path) -> gix::ObjectId {
+        // Use system git to seed a minimal repo — test code is allowed to
+        // shell out (per AGENTS.md: "Test code may use system git if gix/git2
+        // cannot cover the operation"). gix has no high-level init+commit
+        // porcelain that reliably stages arbitrary content in one shot.
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(dir)
+            .status();
+        let _ = std::process::Command::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("t@t")
+            .current_dir(dir)
+            .status();
+        let _ = std::process::Command::new("git")
+            .arg("config")
+            .arg("user.name")
+            .arg("t")
+            .current_dir(dir)
+            .status();
+        std::fs::write(dir.join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "beta\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .arg("add")
+            .arg("-A")
+            .current_dir(dir)
+            .status();
+        let _ = std::process::Command::new("git")
+            .arg("commit")
+            .arg("-q")
+            .arg("-m")
+            .arg("initial")
+            .current_dir(dir)
+            .status();
+        // Resolve HEAD id via gix.
+        let repo = gix::open(dir).unwrap();
+        let head = repo.head_commit().unwrap();
+        head.id
+    }
+
+    #[test]
+    fn test_restore_reverts_modified_files() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return; // skip on systems without git
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let baseline = init_repo_with_commit(dir);
+
+        // Mutate the worktree AFTER the baseline commit.
+        std::fs::write(dir.join("a.txt"), "CHANGED\n").unwrap();
+        std::fs::write(dir.join("c.txt"), "gamma\n").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "CHANGED\n");
+
+        let engine = SnapshotEngine::new(dir);
+        assert!(engine.has_repo());
+        engine.restore_to_commit(baseline).expect("restore must succeed");
+
+        // a.txt must be reverted to the baseline content.
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "alpha\n");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "beta\n");
+        // c.txt was not in the baseline tree → must be pruned.
+        assert!(!dir.join("c.txt").exists(), "pruned file should be gone");
+    }
+
+    #[test]
+    fn test_restore_is_idempotent() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let baseline = init_repo_with_commit(dir);
+
+        let engine = SnapshotEngine::new(dir);
+        engine.restore_to_commit(baseline).expect("first restore");
+        // Restoring to the same commit again should be a no-op success.
+        engine.restore_to_commit(baseline).expect("second restore");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "alpha\n");
     }
 }
