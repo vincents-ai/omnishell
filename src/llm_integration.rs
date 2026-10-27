@@ -125,7 +125,7 @@ impl LlmClient {
             ..Default::default()
         };
         let manager = ProviderManager::new(pm_config);
-        let provider = match manager.get_default_provider() {
+        let provider = match manager.get_default_provider().await {
             Some(p) => p,
             None => {
                 // No provider configured — graceful degradation
@@ -142,11 +142,11 @@ impl LlmClient {
             model: self.config.model.clone(),
             messages: vec![
                 ChatMessage::System {
-                    content: system,
+                    content: system.into(),
                     name: None,
                 },
                 ChatMessage::User {
-                    content: prompt.to_string(),
+                    content: prompt.into(),
                     name: None,
                 },
             ],
@@ -161,7 +161,10 @@ impl LlmClient {
                     .choices
                     .first()
                     .and_then(|c| match &c.message {
-                        ChatMessage::Assistant { content, .. } => content.clone(),
+                        ChatMessage::Assistant { content, .. } => content
+                            .as_ref()
+                            .and_then(|c| c.as_text())
+                            .map(|s| s.to_string()),
                         _ => None,
                     })
                     .unwrap_or_default();
@@ -203,7 +206,7 @@ impl LlmClient {
             ..Default::default()
         };
         let manager = ProviderManager::new(pm_config);
-        let provider = match manager.get_default_provider() {
+        let provider = match manager.get_default_provider().await {
             Some(p) => p,
             None => {
                 return LlmResponse::Error(
@@ -219,11 +222,11 @@ impl LlmClient {
             model: self.config.model.clone(),
             messages: vec![
                 ChatMessage::System {
-                    content: system,
+                    content: system.into(),
                     name: None,
                 },
                 ChatMessage::User {
-                    content: prompt.to_string(),
+                    content: prompt.into(),
                     name: None,
                 },
             ],
@@ -238,7 +241,10 @@ impl LlmClient {
                     .choices
                     .first()
                     .and_then(|c| match &c.message {
-                        ChatMessage::Assistant { content, .. } => content.clone(),
+                        ChatMessage::Assistant { content, .. } => content
+                            .as_ref()
+                            .and_then(|c| c.as_text())
+                            .map(|s| s.to_string()),
                         _ => None,
                     })
                     .unwrap_or_default();
