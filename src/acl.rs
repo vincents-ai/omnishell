@@ -46,6 +46,27 @@ pub enum ArgConstraint {
     /// A positional argument (by index) must not match a glob pattern.
     /// Used to check specific argument positions (e.g., arg[0] is '/' for 'rm').
     PositionalMustNotMatch { index: usize, pattern: String },
+    /// Some target argument names the filesystem root.
+    ///
+    /// A constraint on *any* non-flag argument, not a fixed position: `rm -rf /`
+    /// and `rm -r -f /` and `rm --recursive --force /` all put the target at a
+    /// different index, and `--no-preserve-root` is not the only dangerous flag.
+    TargetsFilesystemRoot,
+}
+
+/// Whether a target argument names the filesystem root itself.
+///
+/// `rm -rf /some/path` is a normal thing for an agent to do and stays allowed;
+/// this matches only the root, its glob forms, and spellings of it. Anything
+/// else — including `~`, `$HOME` and system directories — is deliberately out of
+/// scope: this is a guard against the one command that takes the whole machine
+/// with it, not a general path policy.
+fn is_filesystem_root(target: &str) -> bool {
+    // Trailing slashes are the same directory: "/", "//" and "///" are the root,
+    // and "/./" is the root with a redundant segment.
+    let trimmed = target.trim_end_matches('/');
+    let target = if trimmed.is_empty() { "/" } else { trimmed };
+    matches!(target, "/" | "/." | "/*" | "/.*" | "/./*")
 }
 
 /// The ACL engine: evaluates commands against allowlist + blocklist rules.
@@ -263,10 +284,22 @@ impl AclEngine {
                     ],
                     reason: "Root filesystem preservation bypass blocked".to_string(),
                 },
+                // rm targeting the filesystem root itself. This was previously
+                // allowed "because the agent needs to clean build dirs", which
+                // is true of `rm -rf build/` and not of `rm -rf /` — as a normal
+                // user the latter fails harmlessly, as root it destroys the
+                // machine. Only the root is blocked; deleting a path is not.
+                AclRule {
+                    pattern: "rm".to_string(),
+                    args: vec![ArgConstraint::TargetsFilesystemRoot],
+                    reason: "Deletion of the filesystem root blocked".to_string(),
+                },
                 // Note: 'rm -rf /some/path' is ALLOWED in agent mode — the agent
                 // needs to be able to clean build dirs, remove files, etc.
-                // Only sudo/su/mkfs/dd are fully blocked. The ACL is a safety net,
-                // not a full security boundary. For true sandboxing, use Kids mode.
+                // Only sudo/su/mkfs/dd are blocked outright; rm is blocked when
+                // it targets the root and allowed otherwise. The ACL is a safety
+                // net, not a full security boundary. For true sandboxing, use
+                // Kids mode.
                 // Block mkfs, dd targeting block devices
                 AclRule {
                     pattern: "mkfs*".to_string(),
@@ -389,6 +422,21 @@ fn check_arg_constraint(
                             "Command '{cmd}' blocked: {reason} (dangerous target: {arg})"
                         )));
                     }
+                }
+            }
+            None
+        }
+        ArgConstraint::TargetsFilesystemRoot => {
+            for arg in args {
+                // Flags are not targets: `-rf` must not be matched, and neither
+                // must a value that happens to be a path fragment.
+                if arg.starts_with('-') {
+                    continue;
+                }
+                if is_filesystem_root(arg) {
+                    return Some(Verdict::Deny(format!(
+                        "Command '{cmd}' blocked: {reason} (target: {arg})"
+                    )));
                 }
             }
             None
@@ -862,6 +910,47 @@ mod tests {
         assert_eq!(acl.evaluate("rm file.txt"), Verdict::Allow);
         assert_eq!(acl.evaluate("rm -rf build/"), Verdict::Allow);
         assert_eq!(acl.evaluate("rm -r -f build/"), Verdict::Allow);
+        // A path under root is a path, not the root.
+        assert_eq!(acl.evaluate("rm -rf /tmp/build"), Verdict::Allow);
+        assert_eq!(acl.evaluate("rm -rf /home/shift/project/target"), Verdict::Allow);
+    }
+
+    #[test]
+    fn test_agent_blocks_filesystem_root_deletion() {
+        let acl = AclEngine::new(Mode::Agent);
+        // The target moves with the flags, which is why this is not a
+        // positional rule. Every spelling of "the root" is the same command.
+        for cmd in [
+            "rm -rf /",
+            "rm -fr /",
+            "rm -r -f /",
+            "rm --recursive --force /",
+            "rm /*",
+            "rm -rf /*",
+            "rm -rf /.",
+            "rm -rf /./",
+            "rm -rf //",
+            "rm -rf ///",
+            "rm /",
+        ] {
+            assert!(
+                matches!(acl.evaluate(cmd), Verdict::Deny(_)),
+                "must be denied: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_blocks_root_deletion_through_a_pipe_or_semicolon() {
+        // The engine splits on shell metacharacters before evaluating, so a
+        // root deletion cannot be smuggled in after another command.
+        let acl = AclEngine::new(Mode::Agent);
+        for cmd in ["ls | rm -rf /", "echo hi ; rm -rf /", "true && rm -rf /"] {
+            assert!(
+                matches!(acl.evaluate(cmd), Verdict::Deny(_)),
+                "must be denied: {cmd}"
+            );
+        }
     }
 
     #[test]
