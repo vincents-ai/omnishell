@@ -8,9 +8,19 @@ use shrs_job::{
 };
 use shrs_lang::{ast, Lexer, Parser, Token};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Instant;
 
 use super::{envsubst, expand_arg, EvalResult};
 use crate::acl::{AclEngine, Verdict};
+use crate::output::{emit_agent, AgentCapture};
+use crate::profile::Mode;
+
+/// Exit requested by an agent-mode `exit`/`quit` builtin.
+///
+/// The exit has to be deferred until after the agent envelope for the command
+/// has been emitted, otherwise the process would disappear without output.
+static PENDING_AGENT_EXIT: AtomicI32 = AtomicI32::new(-1);
 
 /// Control flow signals for break/continue in loops.
 /// Returned as errors from eval_command to propagate out of loop bodies.
@@ -45,40 +55,76 @@ impl Default for OmniShellLang {
 
 impl Lang for OmniShellLang {
     fn eval(&self, sh: &Shell, states: &States, line: String) -> anyhow::Result<CmdOutput> {
+        let mode = states.get::<crate::lang::ShellMode>().0;
+        let started = Instant::now();
+        // In agent mode every command is captured so its real stdout/stderr can
+        // be placed inside the JSON envelope. Kids and admin keep the direct,
+        // inherited-descriptor path they have always used.
+        let mut capture = if mode == Mode::Agent {
+            AgentCapture::start().ok()
+        } else {
+            None
+        };
+
+        let mut finish = |exit_code: i32| {
+            if let Some(capture) = capture.take() {
+                let (stdout, stderr) = capture.finish();
+                emit_agent(
+                    &line,
+                    &stdout,
+                    &stderr,
+                    exit_code,
+                    started.elapsed().as_millis() as u64,
+                );
+            }
+            let pending_exit = PENDING_AGENT_EXIT.swap(-1, Ordering::SeqCst);
+            (exit_code, pending_exit)
+        };
+
         let lexer = Lexer::new(&line);
         let parser = Parser::default();
         let parsed = match parser.parse(lexer) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("parse error: {e}");
-                return Ok(CmdOutput::from_status(2));
+                let (code, pending_exit) = finish(2);
+                if pending_exit >= 0 {
+                    std::process::exit(pending_exit);
+                }
+                return Ok(CmdOutput::from_status(code));
             }
         };
 
         let mut job_mgr = states.get_mut::<JobManager>();
         let mut rt = states.get_mut::<shrs::prelude::Runtime>();
 
-        match eval_command(sh, states, &mut job_mgr, &mut rt, &parsed) {
+        let code = match eval_command(sh, states, &mut job_mgr, &mut rt, &parsed) {
             Ok(result) => {
                 // Record in mode-separated history
                 {
                     let mut history = states.get_mut::<crate::history::History>();
                     history.push(&line, result.exit_code, None);
                 }
-                Ok(CmdOutput::from_status(result.exit_code))
+                result.exit_code
             }
             Err(e) => {
                 if e.is::<ShellControl>() {
-                    return Ok(CmdOutput::success());
-                }
-                if let Some(cmd) = extract_simple_cmd_name(&parsed) {
+                    0
+                } else if let Some(cmd) = extract_simple_cmd_name(&parsed) {
                     eprintln!("omnishell: command not found: {cmd}");
-                    return Ok(CmdOutput::from_status(127));
+                    127
+                } else {
+                    eprintln!("eval error: {e}");
+                    1
                 }
-                eprintln!("eval error: {e}");
-                Ok(CmdOutput::error())
             }
+        };
+
+        let (code, pending_exit) = finish(code);
+        if pending_exit >= 0 {
+            std::process::exit(pending_exit);
         }
+        Ok(CmdOutput::from_status(code))
     }
 
     fn name(&self) -> String {
@@ -125,6 +171,18 @@ impl Lang for OmniShellLang {
         }
 
         !brackets.is_empty()
+    }
+}
+
+/// Format an in-band diagnostic for the current mode.
+///
+/// Agent mode must not print a second JSON object here: the command's output is
+/// captured and wrapped in the single envelope emitted by `eval`, so the reason
+/// is left as plain text in the envelope's `stderr`.
+fn diagnostic(message: &str, mode: Mode) -> String {
+    match mode {
+        Mode::Agent => format!("omnishell: {message}"),
+        _ => crate::output::format_error(message, mode),
     }
 }
 
@@ -589,7 +647,7 @@ fn eval_simple(
         let full_cmd = expanded_args.join(" ");
         let shell_mode = states.get::<crate::lang::ShellMode>();
         if let crate::acl::Verdict::Deny(reason) = acl.evaluate(&full_cmd) {
-            eprintln!("{}", crate::output::format_error(&reason, shell_mode.0));
+            eprintln!("{}", diagnostic(&reason, shell_mode.0));
             return Ok(EvalResult { exit_code: 126 });
         }
     }
@@ -638,6 +696,10 @@ fn eval_simple(
         "continue" => return Err(ShellControl::Continue.into()),
         "exit" => {
             let code: i32 = cmd_args.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+            if states.get::<crate::lang::ShellMode>().0 == Mode::Agent {
+                PENDING_AGENT_EXIT.store(code, Ordering::SeqCst);
+                return Ok(EvalResult { exit_code: code });
+            }
             std::process::exit(code);
         }
         "true" | ":" => return Ok(EvalResult { exit_code: 0 }),
@@ -718,7 +780,7 @@ fn eval_simple(
                 crate::builtins::BuiltinResult::Error(msg) => {
                     eprintln!(
                         "{}",
-                        crate::output::format_error(&msg, states.get::<crate::lang::ShellMode>().0)
+                        diagnostic(&msg, states.get::<crate::lang::ShellMode>().0)
                     );
                     return Ok(EvalResult { exit_code: 1 });
                 }
@@ -752,6 +814,10 @@ fn eval_simple(
                     return Ok(EvalResult { exit_code: 0 });
                 }
                 crate::builtins::BuiltinResult::Exit => {
+                    if states.get::<crate::lang::ShellMode>().0 == Mode::Agent {
+                        PENDING_AGENT_EXIT.store(0, Ordering::SeqCst);
+                        return Ok(EvalResult { exit_code: 0 });
+                    }
                     std::process::exit(0);
                 }
             }

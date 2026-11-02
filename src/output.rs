@@ -7,6 +7,15 @@
 
 use std::fmt;
 
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::profile::Mode;
@@ -52,6 +61,171 @@ pub fn format_output(output: &CommandOutput, mode: Mode) -> String {
         Mode::Kids => format_kids(output),
         Mode::Agent => format_agent(output),
         Mode::Admin => format_admin(output),
+    }
+}
+
+/// Emit one agent-mode JSON envelope on stdout.
+///
+/// This is the single output path for agent mode: the envelope is written to
+/// stdout, while anything that is not the envelope (startup banners, ACL
+/// diagnostics, progress) stays on stderr.
+pub fn emit_agent(command: &str, stdout: &str, stderr: &str, exit_code: i32, duration_ms: u64) {
+    let output = CommandOutput {
+        command: command.to_string(),
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+        exit_code,
+        duration_ms,
+    };
+    println!("{}", format_output(&output, Mode::Agent));
+}
+
+/// Redirect this process's stdout/stderr into temporary files for the duration
+/// of one agent-mode command, so the command's real output can be placed in the
+/// JSON envelope instead of being written directly to the terminal.
+///
+/// The saved descriptors are restored by [`AgentCapture::finish`] or, if the
+/// command panics, by `Drop`.
+#[cfg(unix)]
+pub struct AgentCapture {
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    saved_stdout: i32,
+    saved_stderr: i32,
+    active: bool,
+}
+
+#[cfg(unix)]
+impl AgentCapture {
+    pub fn start() -> std::io::Result<Self> {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let stdout_path = std::env::temp_dir().join(format!("omnishell-{unique}.stdout"));
+        let stderr_path = std::env::temp_dir().join(format!("omnishell-{unique}.stderr"));
+
+        let stdout_file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&stdout_path)?;
+        let stderr_file = match OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&stderr_path)
+        {
+            Ok(file) => file,
+            Err(e) => {
+                let _ = std::fs::remove_file(&stdout_path);
+                return Err(e);
+            }
+        };
+
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if saved_stdout < 0 {
+            let _ = std::fs::remove_file(&stdout_path);
+            let _ = std::fs::remove_file(&stderr_path);
+            return Err(std::io::Error::last_os_error());
+        }
+        let saved_stderr = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if saved_stderr < 0 {
+            unsafe { libc::close(saved_stdout) };
+            let _ = std::fs::remove_file(&stdout_path);
+            let _ = std::fs::remove_file(&stderr_path);
+            return Err(std::io::Error::last_os_error());
+        }
+
+        if unsafe { libc::dup2(stdout_file.as_raw_fd(), libc::STDOUT_FILENO) } < 0
+            || unsafe { libc::dup2(stderr_file.as_raw_fd(), libc::STDERR_FILENO) } < 0
+        {
+            unsafe {
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO);
+                libc::dup2(saved_stderr, libc::STDERR_FILENO);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            let _ = std::fs::remove_file(&stdout_path);
+            let _ = std::fs::remove_file(&stderr_path);
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // The File handles can be dropped now; the duplicated descriptors are
+        // what the process and any child commands write through.
+        drop(stdout_file);
+        drop(stderr_file);
+
+        Ok(Self {
+            stdout_path,
+            stderr_path,
+            saved_stdout,
+            saved_stderr,
+            active: true,
+        })
+    }
+
+    /// Restore stdout/stderr and return everything the command wrote.
+    pub fn finish(mut self) -> (String, String) {
+        self.restore();
+        let stdout = std::fs::read(&self.stdout_path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        let stderr = std::fs::read(&self.stderr_path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        let _ = std::fs::remove_file(&self.stdout_path);
+        let _ = std::fs::remove_file(&self.stderr_path);
+        (stdout, stderr)
+    }
+
+    fn restore(&mut self) {
+        if !self.active {
+            return;
+        }
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        unsafe {
+            libc::dup2(self.saved_stdout, libc::STDOUT_FILENO);
+            libc::dup2(self.saved_stderr, libc::STDERR_FILENO);
+            libc::close(self.saved_stdout);
+            libc::close(self.saved_stderr);
+        }
+        self.active = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for AgentCapture {
+    fn drop(&mut self) {
+        self.restore();
+        if !self.active {
+            let _ = std::fs::remove_file(&self.stdout_path);
+            let _ = std::fs::remove_file(&self.stderr_path);
+        }
+    }
+}
+
+/// Non-Unix fallback: no descriptor capture. OmniShell does not currently
+/// build on Windows; this keeps the type available for cross-checking.
+#[cfg(not(unix))]
+pub struct AgentCapture;
+
+#[cfg(not(unix))]
+impl AgentCapture {
+    pub fn start() -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    pub fn finish(self) -> (String, String) {
+        (String::new(), String::new())
     }
 }
 

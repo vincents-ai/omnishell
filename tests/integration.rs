@@ -608,13 +608,74 @@ fn test_scripting_acl_kids_allows_git_status() {
 #[test]
 fn test_scripting_acl_agent_blocks_sudo() {
     let out = omnishell_cmd("sudo bash", "agent");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("blocked"));
     assert_eq!(out.status.code(), Some(126));
+
+    let envelope = agent_envelope(&out);
+    assert_eq!(envelope["type"], "error");
+    assert_eq!(envelope["exitCode"], 126);
+    assert!(envelope["stderr"].as_str().unwrap().contains("blocked"));
 }
 
 #[test]
 fn test_scripting_acl_admin_allows_all() {
     let out = omnishell_cmd("true", "admin");
     assert!(out.status.success());
+}
+
+// --- Agent mode JSON envelope integration tests ---
+
+/// Parse the one JSON envelope an agent-mode command writes to stdout.
+fn agent_envelope(out: &std::process::Output) -> serde_json::Value {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "agent mode wrote no JSON to stdout; stderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    serde_json::from_str(line.trim())
+        .unwrap_or_else(|e| panic!("stdout is not one JSON envelope ({e}): {line:?}"))
+}
+
+#[test]
+fn test_agent_mode_success_envelope_on_stdout() {
+    let out = omnishell_cmd("echo hi", "agent");
+    assert_eq!(out.status.code(), Some(0));
+
+    let envelope = agent_envelope(&out);
+    assert_eq!(envelope["type"], "success");
+    assert_eq!(envelope["exitCode"], 0);
+    assert!(envelope["stdout"].as_str().unwrap().contains("hi"));
+    assert!(envelope["durationMs"].is_u64());
+    assert_eq!(envelope["command"], "echo hi");
+}
+
+#[test]
+fn test_agent_mode_error_envelope_carries_real_exit_code() {
+    let out = omnishell_cmd("sh -c 'exit 3'", "agent");
+    assert_eq!(out.status.code(), Some(3));
+
+    let envelope = agent_envelope(&out);
+    assert_eq!(envelope["type"], "error");
+    assert_eq!(envelope["exitCode"], 3);
+}
+
+#[test]
+fn test_agent_mode_blocked_command_envelope_has_reason_and_126() {
+    let out = omnishell_cmd("rm -rf /", "agent");
+    assert_eq!(out.status.code(), Some(126));
+
+    let envelope = agent_envelope(&out);
+    assert_eq!(envelope["type"], "error");
+    assert_eq!(envelope["exitCode"], 126);
+    assert!(
+        envelope["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("filesystem root"),
+        "envelope stderr should name the block reason: {envelope}"
+    );
 }
