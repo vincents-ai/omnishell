@@ -49,7 +49,7 @@ Controls how OmniShell connects to LLM providers.
 | `provider` | string | `"openai"` | Provider: `openai`, `anthropic`, `ollama`, `custom` |
 | `model` | string | `"gpt-4o"` | Model identifier (provider-specific) |
 | `api_base` | string? | *(provider default)* | API base URL (required for Ollama/custom) |
-| `api_key` | string? | none | API key. **Prefer env var `OMNISHELL_LLM_API_KEY`** |
+| `api_key` | string? | none | Provider API key. OmniShell does not read `OMNISHELL_LLM_API_KEY`; provider credentials are resolved by `vincents-llm`. |
 | `temperature` | float | `0.7` | Generation temperature (0.0–2.0) |
 | `max_tokens` | int | `1024` | Maximum tokens per request |
 | `timeout_secs` | int | `30` | Request timeout in seconds |
@@ -74,12 +74,13 @@ max_tokens = 4096
 
 ### API Keys
 
-**Recommended:** environment variable:
-```bash
-export OMNISHELL_LLM_API_KEY="sk-..."
-```
+OmniShell parses `api_key` from config but does not read an
+`OMNISHELL_LLM_API_KEY` environment variable. Provider credentials are resolved
+by the `vincents-llm` dependency (for example `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`).
 
-**Fallback:** config file (note: api_key is never serialized back to disk):
+Config file form (note: `api_key` is never serialized back to disk):
+
 ```toml
 [llm]
 api_key = "sk-..."
@@ -182,8 +183,8 @@ Additional ACL rules layered on top of the mode defaults.
 
 | Mode | Strategy | Default rules |
 |------|----------|---------------|
-| Kids | Allowlist only | `ls`, `cd`, `pwd`, `echo`, `cat`, `cowsay`, `fortune`, `date`, `whoami`, `help`, `exit` |
-| Agent | Blocklist | `sudo`, `su`, `passwd`, `rm -rf /`, `mkfs`, `dd if=/dev/zero` |
+| Kids | Allowlist only | `ls`, `cd`, `pwd`, `echo`, `cat`, `cowsay`, `cowthink`, `fortune`, `clear`, `help`, `?`/`ai`, `exit`/`quit`, `mode`, `snapshots`, `undo`, `redo`, `true`, `false`, `test`, and `git status`/`log`/`diff`/`branch` |
+| Agent | Blocklist | `sudo`, `su`, `rm --no-preserve-root`, `rm` targeting `/`, `mkfs*`, `dd` |
 | Admin | No restrictions | Everything allowed |
 
 ### Example: Extend kids allowlist
@@ -215,7 +216,7 @@ extra_block = ["format", "fdisk", "mkfs"]
 
 ### Agent Mode
 - **ACL**: Blocklist — blocks dangerous commands (sudo, rm -rf /, etc.)
-- **Output**: JSON envelope `{"type":"output","command":"...","stdout":"...","exitCode":0}`
+- **Output**: one JSON envelope per command on stdout; see [agent-mode.md](agent-mode.md)
 - **LLM**: Structured — generates commands, explains errors in JSON
 - **Sandbox**: None
 - **Prompt**: `[🤖 agent]$` *(configurable via theme.prompt)*
