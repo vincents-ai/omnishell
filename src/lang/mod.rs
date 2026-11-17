@@ -15,6 +15,50 @@ pub use shell_mode::{ShellContext, ShellMode};
 
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::sync::Mutex;
+
+/// Positional parameters for a script run through the single-command pipeline.
+///
+/// `name` becomes `$0`; `args` become `$1`, `$2`, ... and `$@`. The interactive
+/// shell and `-c` leave this unset, so `$0`/`$@` keep their previous (empty)
+/// behaviour there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptParams {
+    /// The script path, exposed as `$0`.
+    pub name: String,
+    /// The trailing arguments, exposed as `$1`, `$2`, ... and `$@`.
+    pub args: Vec<String>,
+}
+
+static SCRIPT_PARAMS: Mutex<Option<ScriptParams>> = Mutex::new(None);
+
+/// Install the positional parameters used by `$0`, `$1`.., `$@`, `$#`.
+/// Pass `None` to clear them.
+pub fn set_script_params(params: Option<ScriptParams>) {
+    *SCRIPT_PARAMS.lock().unwrap() = params;
+}
+
+/// The positional parameters currently installed, if any.
+pub fn script_params() -> Option<ScriptParams> {
+    SCRIPT_PARAMS.lock().unwrap().clone()
+}
+
+/// Expand one shell word through positional parameters and `$VAR` substitution,
+/// then glob expansion. `"$@"` yields one word per positional argument.
+pub fn expand_word(
+    rt: &shrs::prelude::Runtime,
+    acl_mode: crate::profile::Mode,
+    arg: &str,
+) -> Vec<String> {
+    let bare = arg.trim_matches('"').trim_matches('\'').trim().to_string();
+    if bare == "$@" || bare == "${@}" {
+        if let Some(params) = script_params() {
+            return params.args;
+        }
+    }
+    let substed = envsubst(rt, acl_mode, arg);
+    expand_arg(&substed)
+}
 
 /// Result of evaluating a command.
 #[derive(Default)]
@@ -73,6 +117,41 @@ lazy_static! {
 /// Handles $VAR, ${VAR}, ~, and $(command).
 fn envsubst(rt: &shrs::prelude::Runtime, acl_mode: crate::profile::Mode, arg: &str) -> String {
     let mut result = arg.to_string();
+
+    // Positional parameters: $0, $1..$9, $#, $@, $*, and their ${...} forms.
+    // Only present while a script is being executed.
+    if let Some(params) = script_params() {
+        let value_of = |index: usize| -> String {
+            if index == 0 {
+                params.name.clone()
+            } else {
+                params.args.get(index - 1).cloned().unwrap_or_default()
+            }
+        };
+        let joined = params.args.join(" ");
+        let count = params.args.len().to_string();
+
+        if result.contains("$@") || result.contains("${@}") {
+            result = result.replace("${@}", &joined).replace("$@", &joined);
+        }
+        if result.contains("$*") || result.contains("${*}") {
+            result = result.replace("${*}", &joined).replace("$*", &joined);
+        }
+        if result.contains("$#") || result.contains("${#}") {
+            result = result.replace("${#}", &count).replace("$#", &count);
+        }
+        for index in 0..=9usize {
+            let braced = format!("${{{index}}}");
+            let plain = format!("${index}");
+            let value = value_of(index);
+            if result.contains(&braced) {
+                result = result.replace(&braced, &value);
+            }
+            if result.contains(&plain) {
+                result = result.replace(&plain, &value);
+            }
+        }
+    }
 
     // Arithmetic expansion: $((expr))
     for cap in R_ARITH.captures_iter(arg) {

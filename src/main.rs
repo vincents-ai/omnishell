@@ -57,6 +57,21 @@ fn main() {
         return;
     }
 
+    // A positional script runs through the same single-command pipeline; the
+    // path becomes $0 and the trailing arguments become $@.
+    if let Some(ref script) = args.script {
+        let mut undo_stack = omnishell::UndoStack::new();
+        single_command::execute_script(
+            script,
+            &args.args,
+            mode,
+            &mut snapshot_engine,
+            &mut undo_stack,
+            &audit,
+        );
+        return;
+    }
+
     // Print startup banner for interactive sessions only.
     eprintln!(
         "{}",

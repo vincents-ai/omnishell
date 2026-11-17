@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Vincent Palmer <shift@someone.section.me>"]
 description = "An intelligent, ACL-fortified shell powered by shrs, llm, and gitoxide"
-license = "AGPL-3.0-or-later"
+license = "AGPL-3.0-or-later OR LicenseRef-Commercial"
 
 [lib]
 name = "omnishell"
