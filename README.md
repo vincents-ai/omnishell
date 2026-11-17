@@ -4,7 +4,7 @@
 
 **An intelligent shell for humans and AI agents**
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![License: AGPL-3.0-or-later or Commercial](https://img.shields.io/badge/License-AGPL--3.0--or--later%20OR%20Commercial-blue.svg)](NOTICE)
 [![Built with Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![shell](https://img.shields.io/badge/shell-posix-89e051)](https://en.wikipedia.org/wiki/POSIX)
 
@@ -163,6 +163,9 @@ omnishell --mode agent
 
 # Run a single command
 omnishell -c "echo hello | tr a-z A-Z"
+
+# Run a script with its arguments ($0 is the script path, $@ the arguments)
+omnishell --mode agent path/to/script.sh arg1 arg2
 
 # With a specific profile
 omnishell --profile kids
@@ -344,7 +347,12 @@ Report bugs and feature requests at <https://github.com/vincents-ai/omnishell/is
 
 ## License
 
-OmniShell is dual-licensed under [AGPL-3.0-or-later](LICENSE) or a commercial license from Vincent Palmer. See the [LICENSE](LICENSE) file for details.
+OmniShell is dual-licensed. You may use it under either:
+
+- the [GNU Affero General Public License, version 3.0 or later](LICENSE), whose full text is the `LICENSE` file in this repository; or
+- a commercial license granted by the copyright holder, Vincent Palmer. Commercial terms come from the copyright holder; this repository does not state them.
+
+The workspace manifest declares this choice as `license = "AGPL-3.0-or-later OR LicenseRef-Commercial"`. See [NOTICE](NOTICE) for the same statement and for the one vendored crate, `crates/shrs_job`, which stays MIT.
 
 ---
 

@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use omnishell::Mode;
+use std::path::PathBuf;
 
 /// OmniShell CLI arguments.
 #[derive(Parser, Debug)]
@@ -30,6 +31,21 @@ pub struct Args {
     /// Run a single command and exit (non-interactive)
     #[arg(short, long)]
     pub command: Option<String>,
+
+    /// Script file to run, e.g. `omnishell path/to/script.sh arg1 arg2`
+    ///
+    /// The script must be a shell script. Its path becomes `$0` and the
+    /// trailing arguments become `$1`, `$2`, ... and `$@`.
+    #[arg(value_name = "SCRIPT", conflicts_with = "command")]
+    pub script: Option<PathBuf>,
+
+    /// Arguments passed to the script ($1, $2, ... and $@)
+    #[arg(
+        value_name = "ARGS",
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    pub args: Vec<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]

@@ -11,7 +11,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
-use super::{envsubst, expand_arg, EvalResult};
+use super::{envsubst, EvalResult};
 use crate::acl::{AclEngine, Verdict};
 use crate::output::{emit_agent, AgentCapture};
 use crate::profile::Mode;
@@ -342,8 +342,7 @@ fn eval_command(
         } => {
             let mut expanded = Vec::new();
             for word in wordlist {
-                let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, word);
-                for part in expand_arg(&substed) {
+                for part in super::expand_word(rt, states.get::<crate::lang::ShellMode>().0, word) {
                     expanded.push(part);
                 }
             }
@@ -629,8 +628,7 @@ fn eval_simple(
     // Expand all args with envsubst + glob
     let mut expanded_args = Vec::new();
     for arg in args {
-        let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
-        for part in expand_arg(&substed) {
+        for part in super::expand_word(rt, states.get::<crate::lang::ShellMode>().0, arg) {
             expanded_args.push(part);
         }
     }
@@ -814,11 +812,15 @@ fn eval_simple(
                     return Ok(EvalResult { exit_code: 0 });
                 }
                 crate::builtins::BuiltinResult::Exit => {
+                    let code = cmd_args
+                        .first()
+                        .and_then(|arg| arg.parse::<i32>().ok())
+                        .unwrap_or(0);
                     if states.get::<crate::lang::ShellMode>().0 == Mode::Agent {
-                        PENDING_AGENT_EXIT.store(0, Ordering::SeqCst);
+                        PENDING_AGENT_EXIT.store(code, Ordering::SeqCst);
                         return Ok(EvalResult { exit_code: 0 });
                     }
-                    std::process::exit(0);
+                    std::process::exit(code);
                 }
             }
         }
@@ -964,8 +966,7 @@ fn expand_simple_args(
 ) -> anyhow::Result<Vec<String>> {
     let mut expanded = Vec::new();
     for arg in args {
-        let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
-        for part in expand_arg(&substed) {
+        for part in super::expand_word(rt, states.get::<crate::lang::ShellMode>().0, arg) {
             expanded.push(part);
         }
     }
@@ -1142,8 +1143,7 @@ fn eval_to_procs_with_io(
 
             let mut expanded = Vec::new();
             for arg in args {
-                let substed = envsubst(rt, states.get::<crate::lang::ShellMode>().0, arg);
-                for part in expand_arg(&substed) {
+                for part in super::expand_word(rt, states.get::<crate::lang::ShellMode>().0, arg) {
                     expanded.push(part);
                 }
             }

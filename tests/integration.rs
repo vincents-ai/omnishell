@@ -405,6 +405,105 @@ fn omnishell_cmd(cmd: &str, mode: &str) -> std::process::Output {
         .unwrap_or_else(|e| panic!("failed to run omnishell at {omnishell_path}: {e}"))
 }
 
+fn omnishell_script(script: &std::path::Path, args: &[&str], mode: &str) -> std::process::Output {
+    let omnishell_path =
+        std::env::var("OMNISHELL_BIN").unwrap_or_else(|_| "./target/debug/omnishell".to_string());
+    std::process::Command::new(&omnishell_path)
+        .args(["--mode", mode])
+        .arg(script)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run omnishell at {omnishell_path}: {e}"))
+}
+
+fn write_script(dir: &tempfile::TempDir, name: &str, source: &str) -> std::path::PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, source).unwrap();
+    path
+}
+
+#[test]
+fn a_script_runs_with_its_arguments_and_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(
+        &dir,
+        "args.sh",
+        "#!/bin/sh\necho \"zero=$0\"\necho \"count=$#\"\necho \"one=$1\"\necho \"all=$@\"\n",
+    );
+
+    let out = omnishell_script(&script, &["arg1", "arg2"], "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        out.status.success(),
+        "script failed: status={:?} stdout={stdout} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains(&format!("zero={}", script.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("count=2"), "{stdout}");
+    assert!(stdout.contains("one=arg1"), "{stdout}");
+    assert!(stdout.contains("all=arg1 arg2"), "{stdout}");
+}
+
+#[test]
+fn script_and_command_are_mutually_exclusive() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(&dir, "noop.sh", "#!/bin/sh\necho hi\n");
+    let omnishell_path =
+        std::env::var("OMNISHELL_BIN").unwrap_or_else(|_| "./target/debug/omnishell".to_string());
+
+    let out = std::process::Command::new(&omnishell_path)
+        .args(["--mode", "admin", "-c", "echo hi"])
+        .arg(&script)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run omnishell at {omnishell_path}: {e}"));
+
+    assert!(!out.status.success(), "clap accepted -c and a script");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "unexpected clap error: {stderr}"
+    );
+}
+
+#[test]
+fn a_script_exits_with_its_own_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(&dir, "status.sh", "#!/bin/sh\necho before\nexit 7\n");
+
+    let out = omnishell_script(&script, &[], "admin");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "script status was not propagated"
+    );
+}
+
+#[test]
+fn a_script_sees_its_shebang_argument_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(
+        &dir,
+        "shebang.sh",
+        "#!/bin/sh -e\necho \"count=$#\"\necho \"all=$@\"\n",
+    );
+
+    let out = omnishell_script(&script, &["a", "b"], "admin");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(out.status.success(), "script failed: {stdout}");
+    assert!(stdout.contains("count=2"), "{stdout}");
+    assert!(stdout.contains("all=a b"), "{stdout}");
+    assert!(
+        !stdout.contains("-e"),
+        "the shebang argument leaked into the positional parameters: {stdout}"
+    );
+}
+
 // --- Redirect Integration Tests ---
 
 #[test]
