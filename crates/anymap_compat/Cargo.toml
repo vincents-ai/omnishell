@@ -2,4 +2,5 @@
 name = "anymap"
 version = "1.0.0-beta.2"
 edition = "2021"
+license = "MIT"
 description = "anymap compat shim for Rust 1.88+"

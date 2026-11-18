@@ -21,4 +21,5 @@ SPDX-listed licence.
 The AGPL text in LICENSE covers the OmniShell workspace. The vendored crate
 crates/shrs_job is a separate work and remains licensed under the MIT licence,
 as declared in crates/shrs_job/Cargo.toml. crates/anymap_compat is a local
-compatibility shim and declares no licence field of its own.
+compatibility shim; it is a separate work and is licensed under the MIT licence,
+as declared in crates/anymap_compat/Cargo.toml.
